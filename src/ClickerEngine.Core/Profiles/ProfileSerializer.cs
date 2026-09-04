@@ -22,7 +22,12 @@ public static class ProfileSerializer
     /// <summary>Throws <see cref="ProfileFormatException"/> when the JSON is not a profile.</summary>
     public static ClickerProfile Deserialize(string json)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(json);
+        // An empty file - a zero-byte leftover from a crash, say - is a format problem, not
+        // a caller mistake, so it surfaces the same way as any other unreadable profile.
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            throw new ProfileFormatException("The profile document was empty.");
+        }
 
         try
         {

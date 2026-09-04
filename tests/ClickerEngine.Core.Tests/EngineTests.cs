@@ -368,6 +368,45 @@ public class EngineTests
     }
 
     [Fact]
+    public void StateChangedHandlers_DoNotHoldTheEngineLock()
+    {
+        // A UI handler that touches the engine from another thread must not deadlock, which
+        // is why state events are raised outside the engine's lock rather than inside it.
+        var injector = new RecordingInputInjector();
+        using var engine = CreateEngine(injector, out var stopped);
+
+        var probeSucceeded = new List<bool>();
+        engine.StateChanged += (_, _) =>
+        {
+            var probe = Task.Run(() =>
+            {
+                _ = engine.State;
+                _ = engine.IsActive;
+            });
+
+            lock (probeSucceeded)
+            {
+                probeSucceeded.Add(probe.Wait(TimeSpan.FromSeconds(2)));
+            }
+        };
+
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 2;
+        profile.Interval.DelayMs = 1;
+        engine.Profile = profile;
+
+        engine.Start();
+        WaitForStop(stopped);
+
+        lock (probeSucceeded)
+        {
+            Assert.NotEmpty(probeSucceeded);
+            Assert.All(probeSucceeded, Assert.True);
+        }
+    }
+
+    [Fact]
     public void ActionExecuted_FiresOncePerActionWithARisingIndex()
     {
         var injector = new RecordingInputInjector();

@@ -80,6 +80,30 @@ public class ProfileTests
         Assert.Throws<ProfileFormatException>(() => ProfileSerializer.Deserialize("{ not json"));
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Deserialization_TreatsAnEmptyDocumentAsAFormatProblem(string json)
+    {
+        Assert.Throws<ProfileFormatException>(() => ProfileSerializer.Deserialize(json));
+    }
+
+    [Fact]
+    public void JsonStore_SurvivesAZeroByteProfileFile()
+    {
+        using var temp = new TempDirectory();
+        var store = new JsonProfileStore(temp.Path);
+
+        store.Save(ClickerProfile.CreateDefault("Good"));
+        File.WriteAllText(Path.Combine(store.ProfilesDirectory, "Broken.json"), string.Empty);
+
+        // Listing must not blow up on a damaged file, and the broken profile stays visible
+        // under its file name so it can be deleted from the UI.
+        Assert.Equal(new[] { "Broken", "Good" }, store.List());
+        Assert.Equal("Good", store.Load("Good").Name);
+        Assert.True(store.Delete("Broken"));
+    }
+
     [Fact]
     public void Clone_IsDeep()
     {

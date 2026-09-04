@@ -120,10 +120,13 @@ public sealed class GlobalHotkeyService : IHotkeyService
         }
     }
 
+    /// <summary>
+    /// Uninstalls the hooks. The dispatch thread is left parked on the queue so the service
+    /// can be started again - completing the queue would be permanent.
+    /// </summary>
     public void Stop()
     {
         Thread? hookThread;
-        Thread? dispatchThread;
 
         lock (_sync)
         {
@@ -134,9 +137,10 @@ public sealed class GlobalHotkeyService : IHotkeyService
 
             _running = false;
             hookThread = _hookThread;
-            dispatchThread = _dispatchThread;
             _hookThread = null;
-            _dispatchThread = null;
+
+            // A key held across a stop must not look pressed to the next run.
+            _pressed.Clear();
 
             if (_hookThreadId != 0)
             {
@@ -147,9 +151,6 @@ public sealed class GlobalHotkeyService : IHotkeyService
         }
 
         hookThread?.Join(TimeSpan.FromSeconds(2));
-
-        _queue.CompleteAdding();
-        dispatchThread?.Join(TimeSpan.FromSeconds(2));
     }
 
     public void Dispose()
@@ -165,6 +166,16 @@ public sealed class GlobalHotkeyService : IHotkeyService
         }
 
         Stop();
+
+        Thread? dispatchThread;
+        lock (_sync)
+        {
+            dispatchThread = _dispatchThread;
+            _dispatchThread = null;
+        }
+
+        _queue.CompleteAdding();
+        dispatchThread?.Join(TimeSpan.FromSeconds(2));
         _queue.Dispose();
     }
 

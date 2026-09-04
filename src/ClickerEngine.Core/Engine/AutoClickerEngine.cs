@@ -33,6 +33,7 @@ public sealed class AutoClickerEngine : IDisposable
     private Thread? _runThread;
     private StopReason _pendingStopReason = StopReason.User;
     private EngineState _state = EngineState.Idle;
+    private long _currentRunActions;
     private bool _disposed;
 
     public AutoClickerEngine(
@@ -102,7 +103,7 @@ public sealed class AutoClickerEngine : IDisposable
     public SessionStatistics Statistics { get; } = new();
 
     /// <summary>Actions completed in the current (or most recent) run.</summary>
-    public long CurrentRunActions { get; private set; }
+    public long CurrentRunActions => Interlocked.Read(ref _currentRunActions);
 
     /// <summary>How long <see cref="Stop"/> waits for the run thread before giving up.</summary>
     public TimeSpan StopTimeout { get; set; } = TimeSpan.FromSeconds(5);
@@ -119,6 +120,7 @@ public sealed class AutoClickerEngine : IDisposable
         ClickerProfile snapshot;
         Thread thread;
         CancellationTokenSource cancellation;
+        EngineStateChangedEventArgs? transition;
 
         lock (_sync)
         {
@@ -136,7 +138,7 @@ public sealed class AutoClickerEngine : IDisposable
             _cancellation = cancellation;
             _pendingStopReason = StopReason.User;
             _pauseGate.Set();
-            CurrentRunActions = 0;
+            Interlocked.Exchange(ref _currentRunActions, 0);
 
             thread = new Thread(() => RunLoop(snapshot, cancellation.Token))
             {
@@ -146,10 +148,10 @@ public sealed class AutoClickerEngine : IDisposable
             };
             _runThread = thread;
 
-            SetStateLocked(EngineState.Running, out var transition);
-            RaiseStateChanged(transition);
+            SetStateLocked(EngineState.Running, out transition);
         }
 
+        RaiseStateChanged(transition);
         Statistics.RecordRunStarted();
         Started?.Invoke(this, new EngineStartedEventArgs(
             snapshot,
@@ -185,6 +187,9 @@ public sealed class AutoClickerEngine : IDisposable
     /// </summary>
     public Thread? RequestStop(StopReason reason = StopReason.User)
     {
+        Thread? runThread;
+        EngineStateChangedEventArgs? transition;
+
         lock (_sync)
         {
             if (_state == EngineState.Idle || _cancellation is null)
@@ -193,18 +198,16 @@ public sealed class AutoClickerEngine : IDisposable
             }
 
             _pendingStopReason = reason;
-
-            if (_state != EngineState.Stopping)
-            {
-                SetStateLocked(EngineState.Stopping, out var transition);
-                RaiseStateChanged(transition);
-            }
+            SetStateLocked(EngineState.Stopping, out transition);
 
             // Release the pause gate so a paused run can observe the cancellation.
             _pauseGate.Set();
             _cancellation.Cancel();
-            return _runThread;
+            runThread = _runThread;
         }
+
+        RaiseStateChanged(transition);
+        return runThread;
     }
 
     /// <summary>Starts if idle, stops if active. This is what the start/stop hotkey calls.</summary>
@@ -223,6 +226,8 @@ public sealed class AutoClickerEngine : IDisposable
     /// <summary>Suspends a running session at the next step boundary.</summary>
     public bool Pause()
     {
+        EngineStateChangedEventArgs? transition;
+
         lock (_sync)
         {
             if (_state != EngineState.Running)
@@ -231,15 +236,18 @@ public sealed class AutoClickerEngine : IDisposable
             }
 
             _pauseGate.Reset();
-            SetStateLocked(EngineState.Paused, out var transition);
-            RaiseStateChanged(transition);
-            return true;
+            SetStateLocked(EngineState.Paused, out transition);
         }
+
+        RaiseStateChanged(transition);
+        return true;
     }
 
     /// <summary>Resumes a paused session.</summary>
     public bool Resume()
     {
+        EngineStateChangedEventArgs? transition;
+
         lock (_sync)
         {
             if (_state != EngineState.Paused)
@@ -248,10 +256,11 @@ public sealed class AutoClickerEngine : IDisposable
             }
 
             _pauseGate.Set();
-            SetStateLocked(EngineState.Running, out var transition);
-            RaiseStateChanged(transition);
-            return true;
+            SetStateLocked(EngineState.Running, out transition);
         }
+
+        RaiseStateChanged(transition);
+        return true;
     }
 
     /// <summary>Pauses if running, resumes if paused.</summary>
@@ -334,10 +343,12 @@ public sealed class AutoClickerEngine : IDisposable
         {
             var duration = _clock.Elapsed - runStart;
             Statistics.RecordRunTime(duration);
-            CurrentRunActions = context.Actions;
+            Interlocked.Exchange(ref _currentRunActions, context.Actions);
 
             TryReleaseHeldInput(profile, context);
             TryRestoreCursor(profile, context, startCursor);
+
+            EngineStateChangedEventArgs? transition;
 
             lock (_sync)
             {
@@ -345,10 +356,10 @@ public sealed class AutoClickerEngine : IDisposable
                 _cancellation?.Dispose();
                 _cancellation = null;
                 _pauseGate.Set();
-                SetStateLocked(EngineState.Idle, out var transition);
-                RaiseStateChanged(transition);
+                SetStateLocked(EngineState.Idle, out transition);
             }
 
+            RaiseStateChanged(transition);
             Stopped?.Invoke(this, new EngineStoppedEventArgs(reason, context.Actions, duration, error));
         }
     }
@@ -403,7 +414,7 @@ public sealed class AutoClickerEngine : IDisposable
         }
 
         context.Actions++;
-        CurrentRunActions = context.Actions;
+        Interlocked.Exchange(ref _currentRunActions, context.Actions);
         Statistics.RecordAction();
 
         ActionExecuted?.Invoke(this, new ActionExecutedEventArgs(
