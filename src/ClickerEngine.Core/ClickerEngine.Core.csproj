@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>ClickerEngine.Core</RootNamespace>
+    <AssemblyName>ClickerEngine.Core</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!--
+      The library targets plain net8.0 (not net8.0-windows) so that the pure logic
+      (planner, motion, profiles) can be built and unit-tested on any platform.
+      Win32-only implementations are marked [SupportedOSPlatform("windows")].
+    -->
+  </PropertyGroup>
+
+</Project>

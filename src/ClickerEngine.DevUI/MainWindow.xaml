@@ -1,0 +1,338 @@
+<Window x:Class="ClickerEngine.DevUI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="GhostClick - dev harness"
+        Height="820"
+        Width="1080"
+        MinHeight="600"
+        MinWidth="900"
+        WindowStartupLocation="CenterScreen">
+
+    <DockPanel Margin="10">
+
+        <!-- Status bar -->
+        <StatusBar DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <StatusBarItem>
+                <TextBlock x:Name="StateText" FontWeight="Bold" Text="Idle" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock x:Name="CountersText" Text="0 actions" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock x:Name="BackendText" Text="backend" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem>
+                <TextBlock x:Name="CursorText" Text="cursor" />
+            </StatusBarItem>
+        </StatusBar>
+
+        <!-- Command row -->
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+            <Button x:Name="StartButton" Content="Start" Click="OnStartClicked" />
+            <Button x:Name="StopButton" Content="Stop" Click="OnStopClicked" IsEnabled="False" />
+            <Button x:Name="PauseButton" Content="Pause" Click="OnPauseClicked" IsEnabled="False" />
+            <Separator Margin="8,0" />
+            <Button Content="Apply" Click="OnApplyClicked" ToolTip="Push the fields below into the engine profile." />
+            <Button Content="Reset counters" Click="OnResetCountersClicked" MinWidth="110" />
+            <CheckBox x:Name="DryRunBox"
+                      Content="Dry run (log only, no real input)"
+                      Margin="12,0,0,0"
+                      VerticalAlignment="Center"
+                      Click="OnDryRunChanged" />
+        </StackPanel>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="1.1*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Column 1: profile, action, interval, repeat -->
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
+                <StackPanel>
+
+                    <GroupBox Header="Profile">
+                        <StackPanel>
+                            <ComboBox x:Name="ProfileBox" />
+                            <WrapPanel>
+                                <Button Content="Load" Click="OnLoadProfileClicked" MinWidth="64" />
+                                <Button Content="Save" Click="OnSaveProfileClicked" MinWidth="64" />
+                                <Button Content="Save as" Click="OnSaveAsClicked" MinWidth="64" Margin="0,6,6,0" />
+                                <Button Content="New" Click="OnNewProfileClicked" MinWidth="64" Margin="0,6,6,0" />
+                                <Button Content="Delete" Click="OnDeleteProfileClicked" MinWidth="64" Margin="0,6,6,0" />
+                            </WrapPanel>
+                            <Label Content="Profile name" Margin="0,8,0,0" />
+                            <TextBox x:Name="NameBox" />
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="Action">
+                        <StackPanel>
+                            <Label Content="Run mode" />
+                            <ComboBox x:Name="ClickModeBox" />
+
+                            <Label Content="Input kind" />
+                            <ComboBox x:Name="ActionKindBox" />
+
+                            <Label Content="Mouse button" />
+                            <ComboBox x:Name="MouseButtonBox" />
+
+                            <Label Content="Click type" />
+                            <ComboBox x:Name="ClickTypeBox" />
+
+                            <Label Content="Keyboard key" />
+                            <ComboBox x:Name="ActionKeyBox" />
+
+                            <StackPanel Orientation="Horizontal">
+                                <CheckBox x:Name="ActionCtrlBox" Content="Ctrl" Margin="0,0,10,6" />
+                                <CheckBox x:Name="ActionAltBox" Content="Alt" Margin="0,0,10,6" />
+                                <CheckBox x:Name="ActionShiftBox" Content="Shift" Margin="0,0,10,6" />
+                            </StackPanel>
+
+                            <Label Content="Hold duration (ms)" />
+                            <TextBox x:Name="HoldDurationBox" />
+
+                            <Label Content="Double click gap (ms)" />
+                            <TextBox x:Name="DoubleGapBox" />
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="Interval">
+                        <StackPanel>
+                            <Label Content="Delay (ms)" />
+                            <TextBox x:Name="DelayBox" />
+
+                            <CheckBox x:Name="RandomIntervalBox" Content="Randomize within a range" />
+
+                            <Label Content="Minimum (ms)" />
+                            <TextBox x:Name="MinDelayBox" />
+
+                            <Label Content="Maximum (ms)" />
+                            <TextBox x:Name="MaxDelayBox" />
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="Repeat">
+                        <StackPanel>
+                            <Label Content="Mode" />
+                            <ComboBox x:Name="RepeatModeBox" />
+
+                            <Label Content="Count" />
+                            <TextBox x:Name="RepeatCountBox" />
+                        </StackPanel>
+                    </GroupBox>
+
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Column 2: target, movement, jitter, directional -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
+                <StackPanel>
+
+                    <GroupBox Header="Target">
+                        <StackPanel>
+                            <Label Content="Mode" />
+                            <ComboBox x:Name="TargetModeBox" />
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                    <Label Content="Fixed X" />
+                                    <TextBox x:Name="FixedXBox" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                                    <Label Content="Fixed Y" />
+                                    <TextBox x:Name="FixedYBox" />
+                                </StackPanel>
+                            </Grid>
+
+                            <CheckBox x:Name="RestoreCursorBox" Content="Restore the cursor when a run ends" />
+
+                            <Label Content="Macro route" />
+                            <ListBox x:Name="RouteList" Height="120" Margin="0,0,0,6" />
+                            <WrapPanel>
+                                <Button Content="Record" Click="OnRecordPointClicked" MinWidth="64"
+                                        ToolTip="Capture the current cursor position." />
+                                <Button Content="Remove" Click="OnRemovePointClicked" MinWidth="64" />
+                                <Button Content="Clear" Click="OnClearPointsClicked" MinWidth="64" />
+                            </WrapPanel>
+                            <Label Content="Delay for new points (ms)" Margin="0,6,0,0" />
+                            <TextBox x:Name="PointDelayBox" />
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="Movement">
+                        <StackPanel>
+                            <Label Content="Mode" />
+                            <ComboBox x:Name="MovementModeBox" />
+
+                            <Label Content="Easing" />
+                            <ComboBox x:Name="EasingBox" />
+
+                            <Label Content="Duration (ms, 0 = derive from speed)" />
+                            <TextBox x:Name="MoveDurationBox" />
+
+                            <Label Content="Speed (px/s)" />
+                            <TextBox x:Name="MoveSpeedBox" />
+
+                            <Label Content="Step interval (ms)" />
+                            <TextBox x:Name="MoveStepBox" />
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="Jitter">
+                        <StackPanel>
+                            <CheckBox x:Name="PositionJitterBox" Content="Randomize the click position" />
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                    <Label Content="Max offset X" />
+                                    <TextBox x:Name="OffsetXBox" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                                    <Label Content="Max offset Y" />
+                                    <TextBox x:Name="OffsetYBox" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Label Content="Path wobble (px)" />
+                            <TextBox x:Name="PathJitterBox" />
+
+                            <CheckBox x:Name="TimingJitterBox" Content="Randomize the timing" />
+
+                            <Label Content="Timing spread (%)" />
+                            <TextBox x:Name="TimingPercentBox" />
+                        </StackPanel>
+                    </GroupBox>
+
+                    <GroupBox Header="Directional drift">
+                        <StackPanel>
+                            <Label Content="Angle (0 = right, 90 = up)" />
+                            <TextBox x:Name="AngleBox" />
+
+                            <Label Content="Speed (px/s)" />
+                            <TextBox x:Name="DriftSpeedBox" />
+
+                            <Label Content="Angle jitter (degrees)" />
+                            <TextBox x:Name="AngleJitterBox" />
+
+                            <Label Content="At the screen edge" />
+                            <ComboBox x:Name="BoundsBox" />
+
+                            <CheckBox x:Name="UseStartPointBox" Content="Start from a fixed point" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                    <Label Content="Start X" />
+                                    <TextBox x:Name="StartXBox" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                                    <Label Content="Start Y" />
+                                    <TextBox x:Name="StartYBox" />
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </GroupBox>
+
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Column 3: hotkeys, safety, log -->
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <GroupBox Grid.Row="0" Header="Hotkeys (global)">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <Label Grid.Row="0" Grid.Column="0" Content="Start / stop" Margin="0,0,8,0" />
+                        <ComboBox Grid.Row="0" Grid.Column="1" x:Name="StartStopKeyBox" />
+                        <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,6">
+                            <CheckBox x:Name="StartStopCtrlBox" Content="Ctrl" Margin="0,0,6,0" />
+                            <CheckBox x:Name="StartStopAltBox" Content="Alt" Margin="0,0,6,0" />
+                            <CheckBox x:Name="StartStopShiftBox" Content="Shift" />
+                        </StackPanel>
+
+                        <Label Grid.Row="1" Grid.Column="0" Content="Pause" Margin="0,0,8,0" />
+                        <ComboBox Grid.Row="1" Grid.Column="1" x:Name="PauseKeyBox" />
+                        <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,6">
+                            <CheckBox x:Name="PauseCtrlBox" Content="Ctrl" Margin="0,0,6,0" />
+                            <CheckBox x:Name="PauseAltBox" Content="Alt" Margin="0,0,6,0" />
+                            <CheckBox x:Name="PauseShiftBox" Content="Shift" />
+                        </StackPanel>
+
+                        <Label Grid.Row="2" Grid.Column="0" Content="Emergency stop" Margin="0,0,8,0" />
+                        <ComboBox Grid.Row="2" Grid.Column="1" x:Name="StopKeyBox" />
+                        <StackPanel Grid.Row="2" Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,6">
+                            <CheckBox x:Name="StopCtrlBox" Content="Ctrl" Margin="0,0,6,0" />
+                            <CheckBox x:Name="StopAltBox" Content="Alt" Margin="0,0,6,0" />
+                            <CheckBox x:Name="StopShiftBox" Content="Shift" />
+                        </StackPanel>
+
+                        <Label Grid.Row="3" Grid.Column="0" Content="Record point" Margin="0,0,8,0" />
+                        <ComboBox Grid.Row="3" Grid.Column="1" x:Name="RecordKeyBox" />
+                        <StackPanel Grid.Row="3" Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,6">
+                            <CheckBox x:Name="RecordCtrlBox" Content="Ctrl" Margin="0,0,6,0" />
+                            <CheckBox x:Name="RecordAltBox" Content="Alt" Margin="0,0,6,0" />
+                            <CheckBox x:Name="RecordShiftBox" Content="Shift" />
+                        </StackPanel>
+                    </Grid>
+                </GroupBox>
+
+                <GroupBox Grid.Row="1" Header="Safety">
+                    <StackPanel>
+                        <CheckBox x:Name="FailsafeBox" Content="Emergency stop hotkey is armed" />
+                        <CheckBox x:Name="StopOnMoveBox" Content="Stop if the cursor is moved by hand" />
+
+                        <Label Content="Maximum run duration (s, 0 = unlimited)" />
+                        <TextBox x:Name="MaxDurationBox" />
+
+                        <Label Content="Maximum actions per run (0 = unlimited)" />
+                        <TextBox x:Name="MaxActionsBox" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Grid.Row="2" Header="Log">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="0,6,0,0">
+                            <Button Content="Clear" Click="OnClearLogClicked" MinWidth="64" />
+                            <CheckBox x:Name="LogInputBox"
+                                      Content="Log every injected event"
+                                      VerticalAlignment="Center"
+                                      Margin="8,0,0,0" />
+                        </StackPanel>
+                        <ListBox x:Name="LogList" FontFamily="Consolas" FontSize="11" />
+                    </DockPanel>
+                </GroupBox>
+            </Grid>
+        </Grid>
+    </DockPanel>
+</Window>
