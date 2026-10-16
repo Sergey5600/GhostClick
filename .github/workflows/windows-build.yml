@@ -1,13 +1,17 @@
 # Builds the whole solution on Windows (the WPF projects need it), runs both test suites,
-# publishes GhostClick.exe as a self-contained single file, uploads it as an artifact
-# (Actions -> the run -> Artifacts -> GhostClick-win-x64) and checks that the published exe
-# starts and shows its interface.
+# publishes the app, packs it into GhostClick-Setup-<version>.exe with Inno Setup
+# (installer/GhostClick.iss) and uploads that (Actions -> the run -> Artifacts). Then it
+# installs the setup silently on the runner, checks the shortcuts and the uninstall entry,
+# starts the installed app and waits for its interface, and uninstalls it again.
+#
+# Pushing a tag vX.Y.Z (matching <Version> in GhostClick.App.csproj) also publishes the
+# setup as a GitHub release - the link to hand out.
 name: Windows build
 
 on:
   push:
     branches: ['**']
-    paths-ignore: ['**.md']
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -21,10 +25,11 @@ env:
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  INNO_SETUP_PACKAGE: innosetup-compiler@6.3.1
 
 jobs:
   build:
-    name: Build, test, publish
+    name: Build, test, package
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -53,30 +58,59 @@ jobs:
           -c Release --no-build
           --logger "trx;LogFileName=bridge.trx" --results-directory TestResults
 
-      - name: Publish GhostClick.exe
+      # A tag build is the release <Version> names and must match it; any other build is
+      # <Version>-dev.<run number>, so two test setups never share a name.
+      - name: Work out the version
+        shell: pwsh
+        run: |
+          $csproj = Get-Content src/GhostClick.App/GhostClick.App.csproj -Raw
+          if ($csproj -notmatch '<Version>(\d+\.\d+\.\d+)</Version>') { throw 'GhostClick.App.csproj has no <Version>X.Y.Z</Version>' }
+          $base = $Matches[1]
+
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            if ($env:GITHUB_REF_NAME -ne "v$base") {
+              throw "The tag $env:GITHUB_REF_NAME does not match <Version>$base</Version> in GhostClick.App.csproj"
+            }
+            $version = $base
+          } else {
+            $version = "$base-dev.$env:GITHUB_RUN_NUMBER"
+          }
+
+          Write-Host "Version: $version"
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "FILE_VERSION=$base.0" >> $env:GITHUB_ENV
+
+      # A plain folder rather than one big exe: the installer compresses it far better, and
+      # the app starts faster without unpacking itself first.
+      - name: Publish the app
         run: >
           dotnet publish src/GhostClick.App/GhostClick.App.csproj
           -c Release -r win-x64 --self-contained true
-          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-          -o publish/GhostClick
+          -p:Version=${{ env.VERSION }}
+          -p:DebugType=none -p:PublishDocumentationFiles=false
+          -o publish/app
 
-      - name: Check the package
+      - name: Check the published app
         shell: pwsh
         run: |
           $required = 'GhostClick.exe', 'wwwroot/index.html', 'wwwroot/app.js', 'wwwroot/host.js',
                       'wwwroot/layout.js', 'wwwroot/app.css', 'wwwroot/vendor/preact.min.js',
                       'wwwroot/vendor/htm.min.js', 'wwwroot/fonts/Geist-Variable.woff2'
           foreach ($file in $required) {
-            if (-not (Test-Path "publish/GhostClick/$file")) { throw "The package is missing $file" }
+            if (-not (Test-Path "publish/app/$file")) { throw "The published app is missing $file" }
           }
-          Get-ChildItem publish/GhostClick -Recurse -File |
-            Select-Object @{ n = 'File'; e = { $_.FullName.Substring((Resolve-Path publish/GhostClick).Path.Length + 1) } }, Length |
-            Format-Table -AutoSize
+
+          # Debug symbols and API docs are of no use to someone running the app.
+          $clutter = Get-ChildItem publish/app -Recurse -File -Include *.pdb, *.xml
+          if ($clutter) { throw "The published app carries files nobody needs: $($clutter.Name -join ', ')" }
+
+          $files = Get-ChildItem publish/app -Recurse -File
+          Write-Host ("{0} files, {1:N0} MB" -f $files.Count, (($files | Measure-Object Length -Sum).Sum / 1MB))
 
           # The exe must carry the GhostClick icon, not the generic one Windows shows for an
           # exe without any: the ghost sits on a dark slate square, the generic icon is light.
           Add-Type -AssemblyName System.Drawing
-          $icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path publish/GhostClick/GhostClick.exe).Path)
+          $icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path publish/app/GhostClick.exe).Path)
           $bitmap = $icon.ToBitmap()
           $dark = 0
           for ($y = 0; $y -lt $bitmap.Height; $y++) {
@@ -88,24 +122,92 @@ jobs:
           Write-Host "Icon: $($bitmap.Width)x$($bitmap.Height), $dark dark slate pixels"
           if ($dark -lt 200) { throw 'GhostClick.exe does not carry the GhostClick icon' }
 
-      - name: Upload GhostClick-win-x64
+      # Inno Setup from npm: a pinned, unpacked compiler, nothing installed on the runner.
+      - name: Get Inno Setup
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP inno
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          npm pack $env:INNO_SETUP_PACKAGE --pack-destination $dir --silent
+          if ($LASTEXITCODE -ne 0) { throw "npm pack $env:INNO_SETUP_PACKAGE failed" }
+          # Windows' own tar: Git's GNU tar would read C:\... as a remote host.
+          & "$env:SystemRoot\System32\tar.exe" -xzf (Get-ChildItem $dir -Filter *.tgz).FullName -C $dir
+          if ($LASTEXITCODE -ne 0) { throw 'Unpacking Inno Setup failed' }
+          $iscc = Join-Path $dir package/bin/ISCC.exe
+          if (-not (Test-Path $iscc)) { throw 'ISCC.exe is not where the package should have it' }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      # The setup carries Microsoft's small WebView2 bootstrapper and runs it only on a PC
+      # without the runtime. It is taken only if Microsoft's signature on it checks out.
+      - name: Get the WebView2 bootstrapper
+        shell: pwsh
+        run: |
+          $file = 'installer/MicrosoftEdgeWebview2Setup.exe'
+          Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $file
+          $signature = Get-AuthenticodeSignature $file
+          Write-Host "Signature: $($signature.Status), $($signature.SignerCertificate.Subject)"
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+            throw 'The WebView2 bootstrapper is not signed by Microsoft'
+          }
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          & $env:ISCC installer/GhostClick.iss "/DAppVersion=$env:VERSION" "/DFileVersion=$env:FILE_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          $setup = Get-Item "publish/installer/GhostClick-Setup-$env:VERSION.exe"
+          Write-Host ("{0}: {1:N1} MB" -f $setup.Name, ($setup.Length / 1MB))
+
+      - name: Upload the installer
         uses: actions/upload-artifact@v6
         with:
-          name: GhostClick-win-x64
-          path: publish/GhostClick
+          name: GhostClick-Setup-${{ env.VERSION }}
+          path: publish/installer/GhostClick-Setup-${{ env.VERSION }}.exe
           if-no-files-found: error
 
-      # Starts the published exe on the runner's desktop and waits for the interface to show
-      # up on screen. The page draws nothing until the engine has answered it, so the green
-      # «Старт» button and the blue ЛКМ appearing prove the whole chain: WebView2, the page,
-      # the bridge and the engine. The last screenshot is uploaded either way.
-      - name: Smoke test
+      # What a user gets, checked end to end: the silent install puts the app, the Start menu
+      # and desktop shortcuts and the «Apps» entry in place; the installed app starts and
+      # shows its interface (the page draws nothing until the engine has answered it, so the
+      # green «Старт» and the blue ЛКМ prove WebView2, the page, the bridge and the engine);
+      # the uninstaller takes everything away again but the user's profiles.
+      - name: Install, run and uninstall
         shell: pwsh
         run: |
           $runtimeKey = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
           $runtime = try { (Get-ItemProperty $runtimeKey -ErrorAction Stop).pv } catch { 'not found' }
           Write-Host "WebView2 Runtime: $runtime"
 
+          $installDir = Join-Path $env:LOCALAPPDATA 'Programs\GhostClick'
+          $exe = Join-Path $installDir 'GhostClick.exe'
+          $startMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'GhostClick.lnk'
+          $desktop = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'GhostClick.lnk'
+          $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{6E27B7AA-6BAA-4941-93BB-7998B449A0AA}_is1'
+          $profiles = Join-Path $env:APPDATA 'GhostClick'
+
+          # --- Install ---
+          $setup = (Resolve-Path "publish/installer/GhostClick-Setup-$env:VERSION.exe").Path
+          $install = Start-Process $setup -Wait -PassThru -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=desktopicon', "/LOG=$PWD\install.log"
+          if ($install.ExitCode -ne 0) { throw "Setup failed with exit code $($install.ExitCode); see install.log" }
+
+          foreach ($path in $exe, (Join-Path $installDir 'wwwroot\index.html'), $startMenu, $desktop) {
+            if (-not (Test-Path $path)) { throw "Setup did not create $path" }
+          }
+
+          $shell = New-Object -ComObject WScript.Shell
+          foreach ($link in $startMenu, $desktop) {
+            $target = $shell.CreateShortcut($link).TargetPath
+            if ($target -ne $exe) { throw "$link points at '$target' instead of $exe" }
+          }
+
+          $entry = Get-ItemProperty $uninstallKey -ErrorAction SilentlyContinue
+          if (-not $entry) { throw 'Setup registered no uninstall entry' }
+          Write-Host "Apps entry: $($entry.DisplayName) $($entry.DisplayVersion), icon $($entry.DisplayIcon)"
+          if ($entry.DisplayName -ne 'GhostClick' -or $entry.DisplayVersion -ne $env:VERSION) {
+            throw 'The uninstall entry has the wrong name or version'
+          }
+          Write-Host "Installed into $installDir with Start menu and desktop shortcuts."
+
+          # --- Run ---
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
           function Get-Screenshot {
@@ -129,7 +231,7 @@ jobs:
             return $count
           }
 
-          $app = Start-Process publish/GhostClick/GhostClick.exe -PassThru
+          $app = Start-Process $exe -PassThru
           $deadline = (Get-Date).AddSeconds(90)
           $rendered = $false
 
@@ -149,7 +251,33 @@ jobs:
 
           if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
           if (-not $rendered) { throw 'The interface did not appear within 90 seconds; see the smoke-test-screenshot artifact.' }
-          Write-Host 'The interface rendered.'
+          Write-Host 'The installed app rendered its interface.'
+
+          # The page's browser processes outlive the app by a moment and hold its cache folder.
+          $deadline = (Get-Date).AddSeconds(30)
+          while ((Get-Date) -lt $deadline -and
+                 (Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" | Where-Object CommandLine -like '*GhostClick*')) {
+            Start-Sleep -Seconds 1
+          }
+
+          # --- Uninstall ---
+          # A stand-in for the user's profiles: a silent uninstall must keep them.
+          New-Item -ItemType Directory -Force $profiles | Out-Null
+          Set-Content (Join-Path $profiles 'uninstall-keeps-this.txt') 'profiles stay'
+
+          # The uninstaller hands over to a copy of itself and returns at once; wait for it.
+          Start-Process (Join-Path $installDir 'unins000.exe') -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          $deadline = (Get-Date).AddSeconds(90)
+          while ((Get-Date) -lt $deadline -and ((Test-Path $installDir) -or (Test-Path $uninstallKey))) {
+            Start-Sleep -Seconds 1
+          }
+
+          foreach ($path in $installDir, $startMenu, $desktop, $uninstallKey, (Join-Path $env:LOCALAPPDATA 'GhostClick')) {
+            if (Test-Path $path) { throw "The uninstaller left $path behind" }
+          }
+          if (-not (Test-Path (Join-Path $profiles 'uninstall-keeps-this.txt'))) { throw 'The uninstaller removed the user profiles' }
+          Remove-Item -Recurse -Force $profiles
+          Write-Host 'Uninstalled cleanly; the profiles were kept.'
 
       - name: Upload smoke test screenshot
         if: always()
@@ -159,10 +287,48 @@ jobs:
           path: smoke-test.png
           if-no-files-found: ignore
 
-      - name: Upload test results
+      - name: Upload test results and install log
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: test-results
-          path: TestResults
+          name: diagnostics
+          path: |
+            TestResults
+            install.log
           if-no-files-found: ignore
+
+  # Only for a version tag, and only after the setup above installed, ran and uninstalled.
+  release:
+    name: Publish the release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: GhostClick-Setup-*
+          merge-multiple: true
+          path: release
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cat > notes.md <<EOF
+          ## Установка
+
+          1. Скачайте **GhostClick-Setup-${version}.exe** ниже, в разделе Assets.
+          2. Запустите его. Если Windows покажет «Система Windows защитила ваш компьютер», нажмите **Подробнее → Выполнить в любом случае**: установщик не подписан платным сертификатом, поэтому Windows его пока не знает.
+          3. Нажмите «Далее» и «Установить». Права администратора не нужны.
+
+          GhostClick появится в меню «Пуск» и на рабочем столе. Нужна 64-битная Windows 10 или 11; если на компьютере нет компонента Microsoft Edge WebView2, установщик поставит его сам.
+
+          Новая версия ставится поверх старой, профили сохраняются. Удалить программу можно через **Параметры → Приложения**.
+          EOF
+          gh release create "$GITHUB_REF_NAME" release/GhostClick-Setup-*.exe \
+            --repo "$GITHUB_REPOSITORY" --title "GhostClick ${version}" --notes-file notes.md

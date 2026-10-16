@@ -9,6 +9,19 @@
 клавиши и действия, док управления, выезжающая панель настроек). Рядом остался старый
 dev-харнесс `ClickerEngine.DevUI` с прямым доступом ко всем полям профиля.
 
+## Установка
+
+Скачайте `GhostClick-Setup-<версия>.exe` со страницы
+[Releases](https://github.com/Sergey5600/GhostClick/releases) и запустите. Установщик
+ставит программу для текущего пользователя (права администратора не нужны), добавляет её
+в меню «Пуск» и, если не снять галочку, на рабочий стол. Нужна 64-битная Windows 10 или 11;
+.NET ставить не надо, а компонент Microsoft Edge WebView2 установщик при необходимости
+поставит сам. Новая версия ставится поверх старой, профили сохраняются; удаление — через
+**Параметры → Приложения**.
+
+Установщик не подписан сертификатом, поэтому при первом запуске Windows SmartScreen может
+показать «Система Windows защитила ваш компьютер» — **Подробнее → Выполнить в любом случае**.
+
 ---
 
 ## Структура решения
@@ -262,21 +275,61 @@ dotnet run --project src/ClickerEngine.DevUI
 пакетом `dotnet-sdk-8.0` из репозиториев дистрибутива этого компонента нет, и сборка всего
 решения целиком там упадёт — движок, мост и тесты при этом собираются и проходят полностью.
 
-Готовый `GhostClick.exe` собирает GitHub Actions (`.github/workflows/windows-build.yml`) на
-каждый пуш: Windows-машина собирает всё решение, гоняет оба набора тестов, публикует
-приложение одним файлом и прикладывает его к запуску. Скачать: вкладка **Actions** →
-нужный запуск → **Artifacts** → `GhostClick-win-x64`. Внутри `GhostClick.exe` и папка
-`wwwroot` — их нужно держать рядом. .NET на компьютере не нужен.
-
-То же вручную на Windows с .NET 8 SDK:
-
-```
-dotnet publish src/GhostClick.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/GhostClick
-```
+Установщик собирает GitHub Actions (`.github/workflows/windows-build.yml`) на каждый пуш:
+Windows-машина собирает всё решение, гоняет оба набора тестов, публикует приложение, пакует
+его в `GhostClick-Setup-<версия>.exe` и прикладывает к запуску (вкладка **Actions** → нужный
+запуск → **Artifacts**). Потом она проверяет установщик так, как его увидит пользователь:
+тихо ставит, проверяет ярлыки и запись в «Приложениях», запускает установленную программу
+и ждёт её интерфейс, удаляет и проверяет, что ничего не осталось, кроме профилей.
 
 Приложению нужен Microsoft Edge WebView2 Runtime: в Windows 11 он встроен, в Windows 10
-обычно уже установлен вместе с Edge. Если его нет, приложение предложит открыть страницу
-загрузки.
+обычно уже установлен вместе с Edge. Установщик ставит его сам, если его нет; при запуске
+без установщика приложение в этом случае предложит открыть страницу загрузки.
+
+### Установщик
+
+`installer/GhostClick.iss` — сценарий Inno Setup 6.3. Что он делает:
+
+* ставит в `%LocalAppData%\Programs\GhostClick` без запроса прав администратора (как
+  Discord или VS Code; `/ALLUSERS` в командной строке ставит в Program Files для всех);
+* создаёт ярлык в «Пуске» и, по галочке (включена), на рабочем столе;
+* ставит WebView2 Runtime с помощью встроенного загрузчика Microsoft, если его нет;
+* закрывает запущенный GhostClick перед обновлением или удалением (мьютекс
+  `GhostClick.SingleInstance` из `Program.cs`);
+* при удалении стирает кэш интерфейса (`%LocalAppData%\GhostClick`), а про профили
+  (`%AppData%\GhostClick`) спрашивает — по умолчанию оставляет.
+
+Интерфейс мастера русский (английский — если Windows не русская), картинки слева и в шапке —
+`installer/art/*.bmp` в пяти масштабах экрана, нарисованы из `assets/InstallerWizard.svg`
+и иконки:
+
+```bash
+assets/build-installer-art.sh   # нужны librsvg2-bin, ImageMagick и установленный шрифт Geist
+```
+
+`AppId` в сценарии менять нельзя: по нему новая версия находит установленную.
+
+**Выпуск версии.** Версия записана в `<Version>` в `src/GhostClick.App/GhostClick.App.csproj`.
+Поднимите её, закоммитьте и отправьте тег с тем же номером:
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+CI соберёт и проверит установщик и создаст на GitHub релиз `GhostClick 1.0.0` с
+`GhostClick-Setup-1.0.0.exe` — ссылку на него и можно раздавать. Тег, не совпадающий с
+`<Version>`, сборка отклонит. Все остальные сборки получают версию вида `1.0.0-dev.<номер
+запуска>`.
+
+**Собрать вручную** на Windows с .NET 8 SDK и [Inno Setup 6.3](https://jrsoftware.org/isdl.php):
+
+```
+dotnet publish src/GhostClick.App -c Release -r win-x64 --self-contained true -p:DebugType=none -p:PublishDocumentationFiles=false -o publish/app
+curl -L -o installer/MicrosoftEdgeWebview2Setup.exe https://go.microsoft.com/fwlink/p/?LinkId=2124703
+ISCC installer/GhostClick.iss /DAppVersion=1.0.0
+```
+
+Готовый установщик появится в `publish/installer`.
 
 ### Интерфейс (`GhostClick.App`)
 

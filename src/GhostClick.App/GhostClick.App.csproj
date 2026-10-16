@@ -9,6 +9,14 @@
     <LangVersion>latest</LangVersion>
     <RootNamespace>GhostClick.App</RootNamespace>
     <AssemblyName>GhostClick</AssemblyName>
+    <!--
+      The release version. CI builds a release from a tag vX.Y.Z and refuses one that does not
+      match this; every other build gets X.Y.Z-dev.<run>. The installer takes it from there.
+    -->
+    <Version>1.0.0</Version>
+    <Product>GhostClick</Product>
+    <Description>GhostClick - автокликер</Description>
+    <Copyright>GhostClick</Copyright>
     <StartupObject>GhostClick.App.Program</StartupObject>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- The shell icon on the .exe: Explorer, taskbar, Alt-Tab, pinned shortcuts. -->

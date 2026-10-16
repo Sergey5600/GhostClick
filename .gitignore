@@ -35,3 +35,7 @@ packages/
 
 # Local profile data produced by the dev UI
 profiles/
+
+# Published app and installer (CI builds them; see installer/GhostClick.iss)
+publish/
+installer/MicrosoftEdgeWebview2Setup.exe
