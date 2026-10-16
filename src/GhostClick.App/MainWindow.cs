@@ -41,10 +41,15 @@ public sealed class MainWindow : Window, IUiChannel
     public MainWindow()
     {
         Title = "GhostClick";
-        Width = 1440;
-        Height = 860;
-        MinWidth = 960;
-        MinHeight = 580;
+
+        // 1440x860 where there is room, but never larger than the screen: on a 1366x768
+        // laptop the window would otherwise open with its bottom (the dock) cut off. The page
+        // scales itself to whatever size the window gets.
+        var workArea = SystemParameters.WorkArea;
+        MinWidth = Math.Min(960, workArea.Width);
+        MinHeight = Math.Min(580, workArea.Height);
+        Width = Math.Max(MinWidth, Math.Min(1440, workArea.Width * 0.92));
+        Height = Math.Max(MinHeight, Math.Min(860, workArea.Height * 0.92));
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Brushes.Black;
 

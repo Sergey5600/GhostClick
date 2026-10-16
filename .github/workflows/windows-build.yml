@@ -1,6 +1,7 @@
 # Builds the whole solution on Windows (the WPF projects need it), runs both test suites,
-# publishes GhostClick.exe as a self-contained single file and uploads it as an artifact:
-# Actions -> the run -> Artifacts -> GhostClick-win-x64.
+# publishes GhostClick.exe as a self-contained single file, uploads it as an artifact
+# (Actions -> the run -> Artifacts -> GhostClick-win-x64) and checks that the published exe
+# starts and shows its interface.
 name: Windows build
 
 on:
@@ -28,9 +29,9 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
 
@@ -73,36 +74,71 @@ jobs:
             Format-Table -AutoSize
 
       - name: Upload GhostClick-win-x64
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: GhostClick-win-x64
           path: publish/GhostClick
           if-no-files-found: error
 
-      # Starts the published app on the runner's desktop and checks it is still alive after
-      # a while; the screenshot shows whether the interface actually rendered. Informational:
-      # a runner without a usable desktop should not block the artifact above.
+      # Starts the published exe on the runner's desktop and waits for the interface to show
+      # up on screen. The page draws nothing until the engine has answered it, so the green
+      # «Старт» button and the blue ЛКМ appearing prove the whole chain: WebView2, the page,
+      # the bridge and the engine. The last screenshot is uploaded either way.
       - name: Smoke test
-        continue-on-error: true
         shell: pwsh
         run: |
-          $app = Start-Process publish/GhostClick/GhostClick.exe -PassThru
-          Start-Sleep -Seconds 25
+          $runtimeKey = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $runtime = try { (Get-ItemProperty $runtimeKey -ErrorAction Stop).pv } catch { 'not found' }
+          Write-Host "WebView2 Runtime: $runtime"
 
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bitmap.Save("$PWD/smoke-test.png")
 
-          if ($app.HasExited) { throw "GhostClick exited on its own with code $($app.ExitCode)" }
-          Write-Host "GhostClick is running (responding: $($app.Responding))"
-          Stop-Process -Id $app.Id -Force
+          function Get-Screenshot {
+            $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+            $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+            $graphics.Dispose()
+            return $bitmap
+          }
+
+          # Samples every 6th pixel; plenty for areas the size of a button.
+          function Measure-Colour($bitmap, [int]$r, [int]$g, [int]$b) {
+            $count = 0
+            for ($y = 0; $y -lt $bitmap.Height; $y += 6) {
+              for ($x = 0; $x -lt $bitmap.Width; $x += 6) {
+                $c = $bitmap.GetPixel($x, $y)
+                if ([math]::Abs($c.R - $r) -le 12 -and [math]::Abs($c.G - $g) -le 12 -and [math]::Abs($c.B - $b) -le 12) { $count++ }
+              }
+            }
+            return $count
+          }
+
+          $app = Start-Process publish/GhostClick/GhostClick.exe -PassThru
+          $deadline = (Get-Date).AddSeconds(90)
+          $rendered = $false
+
+          while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 3
+            if ($app.HasExited) { throw "GhostClick exited on its own with code $($app.ExitCode)" }
+
+            $shot = Get-Screenshot
+            $green = Measure-Colour $shot 48 209 88    # «Старт», F6
+            $blue = Measure-Colour $shot 10 132 255    # ЛКМ, «Действия»
+            $shot.Save("$PWD/smoke-test.png")
+            $shot.Dispose()
+            Write-Host "Interface pixels: green $green, blue $blue"
+
+            if ($green -gt 20 -and $blue -gt 20) { $rendered = $true; break }
+          }
+
+          if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+          if (-not $rendered) { throw 'The interface did not appear within 90 seconds; see the smoke-test-screenshot artifact.' }
+          Write-Host 'The interface rendered.'
 
       - name: Upload smoke test screenshot
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: smoke-test-screenshot
           path: smoke-test.png
@@ -110,7 +146,7 @@ jobs:
 
       - name: Upload test results
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-results
           path: TestResults
