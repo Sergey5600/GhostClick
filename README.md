@@ -262,6 +262,18 @@ dotnet run --project src/ClickerEngine.DevUI
 пакетом `dotnet-sdk-8.0` из репозиториев дистрибутива этого компонента нет, и сборка всего
 решения целиком там упадёт — движок, мост и тесты при этом собираются и проходят полностью.
 
+Готовый `GhostClick.exe` собирает GitHub Actions (`.github/workflows/windows-build.yml`) на
+каждый пуш: Windows-машина собирает всё решение, гоняет оба набора тестов, публикует
+приложение одним файлом и прикладывает его к запуску. Скачать: вкладка **Actions** →
+нужный запуск → **Artifacts** → `GhostClick-win-x64`. Внутри `GhostClick.exe` и папка
+`wwwroot` — их нужно держать рядом. .NET на компьютере не нужен.
+
+То же вручную на Windows с .NET 8 SDK:
+
+```
+dotnet publish src/GhostClick.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/GhostClick
+```
+
 Приложению нужен Microsoft Edge WebView2 Runtime: в Windows 11 он встроен, в Windows 10
 обычно уже установлен вместе с Edge. Если его нет, приложение предложит открыть страницу
 загрузки.

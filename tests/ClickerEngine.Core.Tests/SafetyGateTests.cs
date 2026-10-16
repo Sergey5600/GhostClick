@@ -156,7 +156,10 @@ public class SafetyGateTests
         var injector = new RecordingInputInjector();
         var probe = new FakeWindowProbe { UnderCursor = OwnWindow };
         using var engine = CreateEngine(injector, probe, out var stopped);
-        engine.WindowSettleTime = TimeSpan.FromMilliseconds(150);
+
+        // Far longer than the 40 ms the mouse spends over the browser, so a slow CI machine
+        // cannot stretch that crossing into a settled target.
+        engine.WindowSettleTime = TimeSpan.FromMilliseconds(500);
 
         var profile = FixedCount(1000);
         profile.Interval.DelayMs = 2;

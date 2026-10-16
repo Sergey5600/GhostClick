@@ -1,0 +1,117 @@
+# Builds the whole solution on Windows (the WPF projects need it), runs both test suites,
+# publishes GhostClick.exe as a self-contained single file and uploads it as an artifact:
+# Actions -> the run -> Artifacts -> GhostClick-win-x64.
+name: Windows build
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore: ['**.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build:
+    name: Build, test, publish
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore GhostClick.sln
+
+      - name: Build engine, bridge, app and dev harness
+        run: dotnet build GhostClick.sln -c Release --no-restore
+
+      - name: Test engine
+        run: >
+          dotnet test tests/ClickerEngine.Core.Tests/ClickerEngine.Core.Tests.csproj
+          -c Release --no-build
+          --logger "trx;LogFileName=engine.trx" --results-directory TestResults
+
+      - name: Test bridge
+        run: >
+          dotnet test tests/GhostClick.Bridge.Tests/GhostClick.Bridge.Tests.csproj
+          -c Release --no-build
+          --logger "trx;LogFileName=bridge.trx" --results-directory TestResults
+
+      - name: Publish GhostClick.exe
+        run: >
+          dotnet publish src/GhostClick.App/GhostClick.App.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -o publish/GhostClick
+
+      - name: Check the package
+        shell: pwsh
+        run: |
+          $required = 'GhostClick.exe', 'wwwroot/index.html', 'wwwroot/app.js', 'wwwroot/host.js',
+                      'wwwroot/layout.js', 'wwwroot/app.css', 'wwwroot/vendor/preact.min.js',
+                      'wwwroot/vendor/htm.min.js', 'wwwroot/fonts/Geist-Variable.woff2'
+          foreach ($file in $required) {
+            if (-not (Test-Path "publish/GhostClick/$file")) { throw "The package is missing $file" }
+          }
+          Get-ChildItem publish/GhostClick -Recurse -File |
+            Select-Object @{ n = 'File'; e = { $_.FullName.Substring((Resolve-Path publish/GhostClick).Path.Length + 1) } }, Length |
+            Format-Table -AutoSize
+
+      - name: Upload GhostClick-win-x64
+        uses: actions/upload-artifact@v4
+        with:
+          name: GhostClick-win-x64
+          path: publish/GhostClick
+          if-no-files-found: error
+
+      # Starts the published app on the runner's desktop and checks it is still alive after
+      # a while; the screenshot shows whether the interface actually rendered. Informational:
+      # a runner without a usable desktop should not block the artifact above.
+      - name: Smoke test
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $app = Start-Process publish/GhostClick/GhostClick.exe -PassThru
+          Start-Sleep -Seconds 25
+
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $bitmap.Save("$PWD/smoke-test.png")
+
+          if ($app.HasExited) { throw "GhostClick exited on its own with code $($app.ExitCode)" }
+          Write-Host "GhostClick is running (responding: $($app.Responding))"
+          Stop-Process -Id $app.Id -Force
+
+      - name: Upload smoke test screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-screenshot
+          path: smoke-test.png
+          if-no-files-found: ignore
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults
+          if-no-files-found: ignore

@@ -23,10 +23,14 @@
     <ProjectReference Include="..\GhostClick.Bridge\GhostClick.Bridge.csproj" />
   </ItemGroup>
 
-  <!-- The interface itself: plain files served to WebView2 from next to the executable. -->
+  <!--
+    The interface itself: plain files served to WebView2 from next to the executable. They
+    stay loose even in a single-file publish, because MainWindow maps the wwwroot folder
+    beside the .exe.
+  -->
   <ItemGroup>
     <None Remove="wwwroot\**" />
-    <Content Include="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="wwwroot\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>
