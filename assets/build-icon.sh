@@ -10,7 +10,8 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source_svg="$here/AppIcon.svg"
-target_ico="$here/../src/ClickerEngine.DevUI/Resources/AppIcon.ico"
+# Both GhostClick.App and the dev harness take the icon from here.
+target_ico="$here/AppIcon.ico"
 
 # 16/32/48/256 are what the shell asks for; the rest cover 125-200% display scaling.
 sizes=(16 20 24 32 40 48 64 128 256)

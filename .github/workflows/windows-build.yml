@@ -73,6 +73,21 @@ jobs:
             Select-Object @{ n = 'File'; e = { $_.FullName.Substring((Resolve-Path publish/GhostClick).Path.Length + 1) } }, Length |
             Format-Table -AutoSize
 
+          # The exe must carry the GhostClick icon, not the generic one Windows shows for an
+          # exe without any: the ghost sits on a dark slate square, the generic icon is light.
+          Add-Type -AssemblyName System.Drawing
+          $icon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path publish/GhostClick/GhostClick.exe).Path)
+          $bitmap = $icon.ToBitmap()
+          $dark = 0
+          for ($y = 0; $y -lt $bitmap.Height; $y++) {
+            for ($x = 0; $x -lt $bitmap.Width; $x++) {
+              $c = $bitmap.GetPixel($x, $y)
+              if ($c.A -gt 200 -and $c.R -lt 60 -and $c.G -lt 60 -and $c.B -lt 80 -and $c.B -ge $c.R) { $dark++ }
+            }
+          }
+          Write-Host "Icon: $($bitmap.Width)x$($bitmap.Height), $dark dark slate pixels"
+          if ($dark -lt 200) { throw 'GhostClick.exe does not carry the GhostClick icon' }
+
       - name: Upload GhostClick-win-x64
         uses: actions/upload-artifact@v6
         with:

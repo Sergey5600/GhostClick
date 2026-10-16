@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using ClickerEngine.Core;
 using ClickerEngine.Core.Hotkeys;
@@ -52,6 +53,10 @@ public sealed class MainWindow : Window, IUiChannel
         Height = Math.Max(MinHeight, Math.Min(860, workArea.Height * 0.92));
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = Brushes.Black;
+
+        // The .exe carries the icon too (ApplicationIcon), but a window shows its own: without
+        // this the title bar would fall back to the generic one when run through dotnet run.
+        Icon = BitmapFrame.Create(new Uri("pack://application:,,,/Resources/AppIcon.ico", UriKind.Absolute));
 
         // No white flash while the page loads into a black window.
         _webView.DefaultBackgroundColor = System.Drawing.Color.Black;

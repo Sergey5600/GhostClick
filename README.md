@@ -342,8 +342,8 @@ WebView2 и подключится к встроенному эмулятору 
 
 ### Иконка
 
-Исходник — `assets/AppIcon.svg`. Готовый многоразмерный `.ico` лежит в
-`src/ClickerEngine.DevUI/Resources/AppIcon.ico` и подключён двумя путями: через
+Исходник — `assets/AppIcon.svg`, готовый многоразмерный `assets/AppIcon.ico` рядом. Его
+берут оба приложения, `GhostClick.App` и dev-харнесс, двумя путями: через
 `<ApplicationIcon>` (иконка самого `.exe` — панель задач, проводник, Alt-Tab, закреплённые
 ярлыки) и через `Window.Icon` (заголовок окна, в том числе при запуске `dotnet run` по dll).
 

@@ -11,7 +11,7 @@
     <AssemblyName>ClickerEngine.DevUI</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- The shell icon on the .exe: taskbar, Explorer, Alt-Tab, pinned shortcuts. -->
-    <ApplicationIcon>Resources\AppIcon.ico</ApplicationIcon>
+    <ApplicationIcon>..\..\assets\AppIcon.ico</ApplicationIcon>
     <!-- Allows the WPF project to be compiled from a non-Windows CI machine. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
@@ -26,7 +26,7 @@
       covers the .exe, but a window loaded through `dotnet run` on the .dll would fall back
       to the generic icon without this.
     -->
-    <Resource Include="Resources\AppIcon.ico" />
+    <Resource Include="..\..\assets\AppIcon.ico" Link="Resources\AppIcon.ico" />
   </ItemGroup>
 
 </Project>
