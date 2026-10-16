@@ -25,6 +25,7 @@ public sealed class AutoClickerEngine : IDisposable
     private readonly IClock _clock;
     private readonly IScreenGeometry _screen;
     private readonly IRandomSource _random;
+    private readonly IWindowProbe? _windowProbe;
     private readonly object _sync = new();
     private readonly ManualResetEventSlim _pauseGate = new(initialState: true);
 
@@ -36,16 +37,26 @@ public sealed class AutoClickerEngine : IDisposable
     private long _currentRunActions;
     private bool _disposed;
 
+    /// <param name="injector">Where input goes.</param>
+    /// <param name="clock">Time source; the system clock by default.</param>
+    /// <param name="screen">Desktop bounds used for clamping.</param>
+    /// <param name="random">Randomness for jitter and interval spread.</param>
+    /// <param name="windowProbe">
+    /// When given, actions are held while they would land in this process's own windows, and
+    /// <see cref="SafetySettings.ActiveWindowOnly"/> takes effect. Without one, neither check runs.
+    /// </param>
     public AutoClickerEngine(
         IInputInjector injector,
         IClock? clock = null,
         IScreenGeometry? screen = null,
-        IRandomSource? random = null)
+        IRandomSource? random = null,
+        IWindowProbe? windowProbe = null)
     {
         _injector = injector ?? throw new ArgumentNullException(nameof(injector));
         _clock = clock ?? new SystemClock();
         _screen = screen ?? ResolveDefaultScreen();
         _random = random ?? new SystemRandomSource();
+        _windowProbe = windowProbe;
     }
 
     /// <summary>Raised on every state transition.</summary>
@@ -107,6 +118,16 @@ public sealed class AutoClickerEngine : IDisposable
 
     /// <summary>How long <see cref="Stop"/> waits for the run thread before giving up.</summary>
     public TimeSpan StopTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How often a held action re-checks whether its target window is acceptable.</summary>
+    public TimeSpan WindowPollInterval { get; set; } = TimeSpan.FromMilliseconds(25);
+
+    /// <summary>
+    /// After an action was held for its window, how long the same acceptable window must stay
+    /// targeted before the action goes. Carrying the mouse from the clicker to the game passes
+    /// over other windows on the way; without this the first of them would get the click.
+    /// </summary>
+    public TimeSpan WindowSettleTime { get; set; } = TimeSpan.FromMilliseconds(300);
 
     /// <summary>The injector backend in use, for display.</summary>
     public IInputInjector Injector => _injector;
@@ -315,10 +336,7 @@ public sealed class AutoClickerEngine : IDisposable
 
             foreach (var step in planner.CreatePlan())
             {
-                token.ThrowIfCancellationRequested();
-                _pauseGate.Wait(token);
-
-                if (TryGetLimitBreach(profile, runStart, context, out var breach))
+                if (!AwaitTurn(step, profile, runStart, context, token, out var breach))
                 {
                     reason = breach;
                     break;
@@ -364,6 +382,130 @@ public sealed class AutoClickerEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// Blocks until <paramref name="step"/> may run: honours pause and cancellation, checks the
+    /// safety limits, and holds the first press of an action while its target window is not
+    /// acceptable. Returns false, with the reason, when a limit ends the run instead.
+    /// </summary>
+    private bool AwaitTurn(
+        EngineStep step,
+        ClickerProfile profile,
+        TimeSpan runStart,
+        RunContext context,
+        CancellationToken token,
+        out StopReason breach)
+    {
+        bool startsAction = !context.InAction && step.Kind is EngineStepKind.MouseDown or EngineStepKind.KeyDown;
+        bool held = false;
+        long target = 0;
+        long settling = 0;
+        TimeSpan settlingSince = TimeSpan.Zero;
+
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            _pauseGate.Wait(token);
+
+            if (TryGetLimitBreach(profile, runStart, context, out breach))
+            {
+                return false;
+            }
+
+            if (!startsAction)
+            {
+                return true;
+            }
+
+            if (TryGetTargetWindow(profile, context, out target))
+            {
+                if (!held)
+                {
+                    break;
+                }
+
+                // Coming out of a hold, the target has to stay put for a moment first.
+                if (target != settling)
+                {
+                    settling = target;
+                    settlingSince = _clock.Elapsed;
+                }
+                else if (_clock.Elapsed - settlingSince >= WindowSettleTime)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                held = true;
+                settling = 0;
+
+                // Whatever the user does with the mouse while we wait is not a deviation from
+                // our plan; the reference point is taken again once the action can go ahead.
+                if (profile.Target.Mode == TargetMode.CurrentCursor)
+                {
+                    context.ExpectedCursor = null;
+                }
+            }
+
+            _clock.Wait(WindowPollInterval, token);
+        }
+
+        context.InAction = true;
+
+        if (profile.Safety.ActiveWindowOnly && context.LockedWindow == 0)
+        {
+            context.LockedWindow = target;
+        }
+
+        // Clicking at the cursor: the user aims, then lets go of the mouse. The first action
+        // marks where it was left, so moving it later counts as taking it back.
+        if (profile.Target.Mode == TargetMode.CurrentCursor && context.ExpectedCursor is null)
+        {
+            context.ExpectedCursor = _injector.GetCursorPosition();
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// False while the action about to start would land in the wrong window: one of this
+    /// process's own windows, or - with <see cref="SafetySettings.ActiveWindowOnly"/> - any
+    /// window other than the one the run locked onto. Clicks are judged by the window under
+    /// the cursor, key presses by the foreground window. <paramref name="target"/> is the
+    /// window the action would go to (0 when unknown), which is what a run locks onto.
+    /// </summary>
+    private bool TryGetTargetWindow(ClickerProfile profile, RunContext context, out long target)
+    {
+        target = 0;
+        if (_windowProbe is null)
+        {
+            return true;
+        }
+
+        var action = profile.Action;
+        long clicked = action.UsesMouse ? _windowProbe.GetWindowAt(_injector.GetCursorPosition()) : 0;
+        long typed = action.UsesKeyboard ? _windowProbe.GetForegroundWindow() : 0;
+        target = clicked != 0 ? clicked : typed;
+
+        if (IsOwn(clicked) || IsOwn(typed))
+        {
+            return false;
+        }
+
+        if (!profile.Safety.ActiveWindowOnly)
+        {
+            return true;
+        }
+
+        // Before the lock exists, clicks and keys must at least agree on one window.
+        long expected = context.LockedWindow != 0 ? context.LockedWindow : target;
+        return Matches(clicked) && Matches(typed);
+
+        bool IsOwn(long window) => window != 0 && _windowProbe.IsOwnWindow(window);
+
+        bool Matches(long window) => window == 0 || expected == 0 || window == expected;
+    }
+
     private void Execute(EngineStep step, ClickerProfile profile, RunContext context, CancellationToken token)
     {
         switch (step.Kind)
@@ -375,6 +517,7 @@ public sealed class AutoClickerEngine : IDisposable
             case EngineStepKind.MoveTo:
                 _injector.MoveTo(step.Position);
                 context.LastCommandedPosition = step.Position;
+                context.ExpectedCursor = step.Position;
                 context.HasCommandedMove = true;
                 break;
 
@@ -413,6 +556,7 @@ public sealed class AutoClickerEngine : IDisposable
             return;
         }
 
+        context.InAction = false;
         context.Actions++;
         Interlocked.Exchange(ref _currentRunActions, context.Actions);
         Statistics.RecordAction();
@@ -420,7 +564,7 @@ public sealed class AutoClickerEngine : IDisposable
         ActionExecuted?.Invoke(this, new ActionExecutedEventArgs(
             context.Actions,
             context.HasCommandedMove ? context.LastCommandedPosition : _injector.GetCursorPosition(),
-            profile.Action.Kind));
+            profile.Action.UsesMouse ? ActionKind.Mouse : ActionKind.Keyboard));
     }
 
     /// <summary>Checks the run against the safety limits before executing the next step.</summary>
@@ -445,14 +589,12 @@ public sealed class AutoClickerEngine : IDisposable
             return true;
         }
 
-        // Only meaningful once we have taken control of the cursor: in CurrentCursor mode the
-        // user is supposed to be moving the mouse.
-        if (safety.StopOnUserCursorMove &&
-            context.HasCommandedMove &&
-            profile.Target.Mode != TargetMode.CurrentCursor)
+        // Only meaningful once there is a reference: the last position the engine moved the
+        // cursor to, or, when clicking at the cursor, where the first action found it.
+        if (safety.StopOnUserCursorMove && context.ExpectedCursor is { } expected)
         {
             var actual = _injector.GetCursorPosition();
-            if (actual.DistanceTo(context.LastCommandedPosition) > safety.UserCursorMoveThresholdPixels)
+            if (actual.DistanceTo(expected) > safety.UserCursorMoveThresholdPixels)
             {
                 reason = StopReason.UserCursorMoved;
                 return true;
@@ -546,6 +688,15 @@ public sealed class AutoClickerEngine : IDisposable
         public ScreenPoint LastCommandedPosition { get; set; }
 
         public bool HasCommandedMove { get; set; }
+
+        /// <summary>Where the cursor should be, for the user-moved-the-mouse check; null when unknown.</summary>
+        public ScreenPoint? ExpectedCursor { get; set; }
+
+        /// <summary>True between the first press of an action and the release that completes it.</summary>
+        public bool InAction { get; set; }
+
+        /// <summary>The window an ActiveWindowOnly run locked onto; 0 until the first action.</summary>
+        public long LockedWindow { get; set; }
 
         public HashSet<MouseButton> HeldButtons { get; } = new();
 

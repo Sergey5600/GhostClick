@@ -11,11 +11,12 @@ public class ProfileTests
     {
         var profile = ClickerProfile.CreateDefault("Round trip");
         profile.Mode = ClickMode.Hold;
-        profile.Action.Kind = ActionKind.Keyboard;
-        profile.Action.Key = VirtualKey.F4;
-        profile.Action.KeyModifiers = KeyModifiers.Alt | KeyModifiers.Shift;
+        profile.Action.Inputs = [new InputChord(VirtualKey.F4, KeyModifiers.Alt | KeyModifiers.Shift), InputChord.Mouse(MouseButton.XButton1)];
         profile.Action.ClickType = ClickType.Double;
         profile.Action.HoldDurationMs = 42;
+        profile.Action.RandomizeHoldDuration = true;
+        profile.Action.MinHoldDurationMs = 12;
+        profile.Action.MaxHoldDurationMs = 34;
         profile.Interval.RandomizeEnabled = true;
         profile.Interval.MinDelayMs = 15;
         profile.Interval.MaxDelayMs = 95;
@@ -41,10 +42,12 @@ public class ProfileTests
 
         Assert.Equal(profile.Name, restored.Name);
         Assert.Equal(ClickMode.Hold, restored.Mode);
-        Assert.Equal(VirtualKey.F4, restored.Action.Key);
-        Assert.Equal(KeyModifiers.Alt | KeyModifiers.Shift, restored.Action.KeyModifiers);
+        Assert.Equal(profile.Action.Inputs, restored.Action.Inputs);
         Assert.Equal(ClickType.Double, restored.Action.ClickType);
         Assert.Equal(42, restored.Action.HoldDurationMs);
+        Assert.True(restored.Action.RandomizeHoldDuration);
+        Assert.Equal(12, restored.Action.MinHoldDurationMs);
+        Assert.Equal(34, restored.Action.MaxHoldDurationMs);
         Assert.True(restored.Interval.RandomizeEnabled);
         Assert.Equal(15, restored.Interval.MinDelayMs);
         Assert.Equal(95, restored.Interval.MaxDelayMs);
@@ -78,6 +81,94 @@ public class ProfileTests
     public void Deserialization_RejectsGarbage()
     {
         Assert.Throws<ProfileFormatException>(() => ProfileSerializer.Deserialize("{ not json"));
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("42")]
+    public void Deserialization_RejectsDocumentsThatAreNotObjects(string json)
+    {
+        Assert.Throws<ProfileFormatException>(() => ProfileSerializer.Deserialize(json));
+    }
+
+    [Fact]
+    public void Deserialization_MigratesASchemaOneMouseAction()
+    {
+        const string json = """
+            {
+              "version": 1,
+              "name": "Old mouse",
+              "action": { "kind": "mouse", "button": "right", "clickType": "double", "key": "space", "keyModifiers": "none" }
+            }
+            """;
+
+        var profile = ProfileSerializer.Deserialize(json);
+
+        Assert.Equal(ClickerProfile.CurrentVersion, profile.Version);
+        Assert.Equal(InputChord.Mouse(MouseButton.Right), Assert.Single(profile.Action.Inputs));
+        Assert.Equal(ClickType.Double, profile.Action.ClickType);
+    }
+
+    [Fact]
+    public void Deserialization_MigratesASchemaOneKeyboardActionWithItsModifiers()
+    {
+        const string json = """
+            {
+              "version": 1,
+              "name": "Old keys",
+              "action": { "kind": "keyboard", "button": "left", "key": "f4", "keyModifiers": "alt, shift" }
+            }
+            """;
+
+        var profile = ProfileSerializer.Deserialize(json);
+
+        Assert.Equal(
+            new InputChord(VirtualKey.F4, KeyModifiers.Alt | KeyModifiers.Shift),
+            Assert.Single(profile.Action.Inputs));
+    }
+
+    [Fact]
+    public void Deserialization_MigratesNumericEnumsFromSchemaOne()
+    {
+        // kind 1 = keyboard, key 0x45 = E, modifiers 2 = Control.
+        const string json = """{ "action": { "kind": 1, "key": 69, "keyModifiers": 2 } }""";
+
+        var profile = ProfileSerializer.Deserialize(json);
+
+        Assert.Equal(new InputChord(VirtualKey.E, KeyModifiers.Control), Assert.Single(profile.Action.Inputs));
+    }
+
+    [Fact]
+    public void Deserialization_MigratesAnActionThatOnlyHadDefaults()
+    {
+        // A schema-one file that never touched the action still means "left click".
+        var profile = ProfileSerializer.Deserialize("""{ "version": 1, "action": { "clickType": "single" } }""");
+
+        Assert.Equal(InputChord.Mouse(MouseButton.Left), Assert.Single(profile.Action.Inputs));
+    }
+
+    [Fact]
+    public void Serialization_WritesTheInputListAndNoLegacyFields()
+    {
+        var json = ProfileSerializer.Serialize(ClickerProfile.CreateDefault());
+
+        Assert.Contains("\"inputs\"", json);
+        Assert.Contains("\"leftButton\"", json);
+        Assert.DoesNotContain("\"kind\"", json);
+        Assert.DoesNotContain("\"isMouse\"", json);
+        Assert.DoesNotContain("\"usesMouse\"", json);
+    }
+
+    [Fact]
+    public void Deserialization_TreatsANullInputListAsEmptyRatherThanCrashing()
+    {
+        var profile = ProfileSerializer.Deserialize("""{ "action": { "inputs": null } }""");
+
+        var clone = profile.Clone();
+
+        Assert.Empty(clone.Action.Inputs);
+        Assert.Contains(ProfileValidator.Validate(clone), e => e.Path == "Action.Inputs");
     }
 
     [Theory]

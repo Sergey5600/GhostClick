@@ -221,9 +221,7 @@ public class PlannerTests
         var profile = ClickerProfile.CreateDefault();
         profile.Repeat.Mode = RepeatMode.FixedCount;
         profile.Repeat.Count = 1;
-        profile.Action.Kind = ActionKind.Keyboard;
-        profile.Action.Key = VirtualKey.F;
-        profile.Action.KeyModifiers = KeyModifiers.Control | KeyModifiers.Shift;
+        profile.Action.Inputs = [new InputChord(VirtualKey.F, KeyModifiers.Control | KeyModifiers.Shift)];
 
         var steps = Plan(profile, ScreenPoint.Zero);
 
@@ -250,13 +248,171 @@ public class PlannerTests
         var profile = ClickerProfile.CreateDefault();
         profile.Repeat.Mode = RepeatMode.FixedCount;
         profile.Repeat.Count = 4;
-        profile.Action.Kind = ActionKind.Keyboard;
-        profile.Action.Key = VirtualKey.Space;
+        profile.Action.Inputs = [new InputChord(VirtualKey.Space)];
 
         var steps = Plan(profile, ScreenPoint.Zero);
 
         Assert.DoesNotContain(steps, s => s.Kind is EngineStepKind.MouseDown or EngineStepKind.MouseUp);
         Assert.Equal(4, steps.Count(s => s.Kind == EngineStepKind.KeyDown));
+    }
+
+    [Fact]
+    public void SeveralInputs_GoDownTogetherAndComeUpInReverseInsideTheirModifiers()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 1;
+        profile.Action.Inputs = [InputChord.Mouse(MouseButton.Left), new InputChord(VirtualKey.E, KeyModifiers.Control)];
+
+        var steps = Plan(profile, ScreenPoint.Zero);
+
+        Assert.Equal(
+            new[]
+            {
+                "KeyDown LeftControl",
+                "MouseDown Left",
+                "KeyDown E",
+                "KeyUp E",
+                "MouseUp Left",
+                "KeyUp LeftControl",
+            },
+            steps.Select(s => s.ToString()));
+
+        // Still one action: the chord is one tick, not two.
+        var completing = Assert.Single(steps, s => s.CompletesAction);
+        Assert.Equal(EngineStepKind.MouseUp, completing.Kind);
+    }
+
+    [Fact]
+    public void SeveralInputs_DoubleClickRepeatsTheWholeChord()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 1;
+        profile.Action.ClickType = ClickType.Double;
+        profile.Action.DoubleClickGapMs = 30;
+        profile.Action.Inputs = [InputChord.Mouse(MouseButton.Left), InputChord.Mouse(MouseButton.Right)];
+
+        var steps = Plan(profile, ScreenPoint.Zero);
+
+        Assert.Equal(
+            new[]
+            {
+                "MouseDown Left", "MouseDown Right", "MouseUp Right", "MouseUp Left",
+                "Wait 30 ms",
+                "MouseDown Left", "MouseDown Right", "MouseUp Right", "MouseUp Left",
+            },
+            steps.Select(s => s.ToString()));
+        Assert.Single(steps, s => s.CompletesAction);
+    }
+
+    [Fact]
+    public void SeveralInputs_PressASharedKeyOnlyOnce()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 1;
+        profile.Action.Inputs = [new InputChord(VirtualKey.E), new InputChord(VirtualKey.E, KeyModifiers.Shift)];
+
+        var steps = Plan(profile, ScreenPoint.Zero);
+
+        Assert.Single(steps, s => s.Kind == EngineStepKind.KeyDown && s.Key == VirtualKey.E);
+        Assert.Contains(steps, s => s.Kind == EngineStepKind.KeyDown && s.Key == VirtualKey.LeftShift);
+    }
+
+    [Fact]
+    public void NoInputs_PlanNoPresses()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 3;
+        profile.Action.Inputs = [];
+
+        var steps = Plan(profile, ScreenPoint.Zero);
+
+        Assert.DoesNotContain(steps, s => s.Kind is EngineStepKind.MouseDown or EngineStepKind.KeyDown);
+    }
+
+    [Fact]
+    public void RandomizedHold_DrawsEachHoldFromTheConfiguredRange()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 3;
+        profile.Interval.DelayMs = 0;
+        profile.Action.HoldDurationMs = 500;
+        profile.Action.RandomizeHoldDuration = true;
+        profile.Action.MinHoldDurationMs = 20;
+        profile.Action.MaxHoldDurationMs = 40;
+
+        // 0.0 -> 20 ms, 0.5 -> 30 ms, 0.99 -> 40 ms.
+        var steps = Plan(profile, ScreenPoint.Zero, new ScriptedRandomSource(0.0, 0.5, 0.99));
+
+        // The interval is zero, so the only non-zero waits are the holds.
+        var holds = steps
+            .Where(s => s.Kind == EngineStepKind.Wait && s.Delay > TimeSpan.Zero)
+            .Select(s => s.Delay.TotalMilliseconds);
+        Assert.Equal(new double[] { 20, 30, 40 }, holds);
+    }
+
+    [Fact]
+    public void PositionJitter_AtTheCursorStaysAroundWhereTheUserAimed()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 2000;
+        profile.Interval.DelayMs = 0;
+        profile.Jitter.PositionJitterEnabled = true;
+        profile.Jitter.MaxOffsetX = 3;
+        profile.Jitter.MaxOffsetY = 3;
+
+        // The plan helper leaves the cursor wherever each nudge put it. Offsets measured from
+        // there would random-walk away; every nudge must stay within 3 px of the aim instead.
+        var aim = new ScreenPoint(500, 500);
+        var moves = Plan(profile, aim, new SystemRandomSource(seed: 11))
+            .Where(s => s.Kind == EngineStepKind.MoveTo)
+            .Select(s => s.Position)
+            .ToArray();
+
+        Assert.Equal(2000, moves.Length);
+        Assert.All(moves, p =>
+        {
+            Assert.InRange(p.X, aim.X - 3, aim.X + 3);
+            Assert.InRange(p.Y, aim.Y - 3, aim.Y + 3);
+        });
+    }
+
+    [Fact]
+    public void PositionJitter_AtTheCursorFollowsTheUserWhenTheyReAim()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 4;
+        profile.Jitter.PositionJitterEnabled = true;
+        profile.Jitter.MaxOffsetX = 3;
+        profile.Jitter.MaxOffsetY = 3;
+
+        var injector = new RecordingInputInjector(new ScreenPoint(100, 100));
+        var planner = new ActionPlanner(profile, injector, Screen, new SystemRandomSource(seed: 3));
+
+        var moves = new List<ScreenPoint>();
+        foreach (var step in planner.CreatePlan())
+        {
+            if (step.Kind == EngineStepKind.MoveTo)
+            {
+                injector.SetCursorPosition(step.Position);
+                moves.Add(step.Position);
+            }
+
+            // The user picks the mouse up and aims somewhere else after the second click.
+            if (step.CompletesAction && moves.Count == 2)
+            {
+                injector.SetCursorPosition(new ScreenPoint(900, 700));
+            }
+        }
+
+        Assert.All(moves.Take(2), p => Assert.True(p.DistanceTo(new ScreenPoint(100, 100)) <= 5));
+        Assert.All(moves.Skip(2), p => Assert.True(p.DistanceTo(new ScreenPoint(900, 700)) <= 5));
     }
 
     [Fact]

@@ -61,6 +61,23 @@ public class HotkeyAndRecorderTests
     }
 
     [Fact]
+    public void StartHotkey_ReportsAProfileThatCannotRunInsteadOfThrowing()
+    {
+        using var fixture = new ControllerFixture();
+        fixture.Profile.Target.Mode = TargetMode.MacroRoute;
+        fixture.Profile.Target.Route = [];
+
+        ProfileValidationException? rejected = null;
+        fixture.Controller.StartRejected += (_, e) => rejected = e;
+
+        fixture.Hotkeys.Trigger(HotkeyAction.StartStop);
+
+        Assert.NotNull(rejected);
+        Assert.Contains(rejected!.Errors, e => e.Path == "Target.Route");
+        Assert.Equal(EngineState.Idle, fixture.Engine.State);
+    }
+
+    [Fact]
     public void EmergencyStop_EndsARunImmediately()
     {
         using var fixture = new ControllerFixture();

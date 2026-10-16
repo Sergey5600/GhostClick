@@ -67,6 +67,13 @@ public sealed class RecordingInputInjector : IInputInjector
 
     public string Name => "Recording (dry run)";
 
+    /// <summary>
+    /// The most events kept; older ones are dropped first. Zero (the default) keeps
+    /// everything, which is what tests want. A long-lived dry run should set a limit, or
+    /// the log grows for as long as the run lasts.
+    /// </summary>
+    public int Capacity { get; set; }
+
     /// <summary>Everything recorded so far, oldest first.</summary>
     public IReadOnlyList<InjectedEvent> Events
     {
@@ -130,6 +137,12 @@ public sealed class RecordingInputInjector : IInputInjector
         lock (_sync)
         {
             _events.Add(injected);
+
+            int capacity = Capacity;
+            if (capacity > 0 && _events.Count > capacity)
+            {
+                _events.RemoveRange(0, _events.Count - capacity);
+            }
         }
 
         EventRecorded?.Invoke(this, injected);

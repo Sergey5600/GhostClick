@@ -64,6 +64,8 @@ internal static class NativeMethods
     internal const uint LLKHF_INJECTED = 0x00000010;
     internal const uint LLMHF_INJECTED = 0x00000001;
 
+    internal const uint GA_ROOT = 2;
+
     [StructLayout(LayoutKind.Sequential)]
     internal struct POINT
     {
@@ -202,6 +204,18 @@ internal static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PostThreadMessage(uint idThread, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr WindowFromPoint(POINT point);
+
+    [DllImport("user32.dll")]
+    internal static extern IntPtr GetAncestor(IntPtr hwnd, uint gaFlags);
+
+    [DllImport("user32.dll")]
+    internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
     [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
     internal static extern uint TimeBeginPeriod(uint uMilliseconds);

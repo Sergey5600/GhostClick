@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>GhostClick.Bridge</RootNamespace>
+    <AssemblyName>GhostClick.Bridge</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!--
+      Everything between the web interface and the engine that does not need a window: the
+      message protocol, key codes, profile mapping. Plain net8.0, so it is tested on any OS;
+      the WPF shell around it stays a few dozen lines.
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClickerEngine.Core\ClickerEngine.Core.csproj" />
+  </ItemGroup>
+
+</Project>

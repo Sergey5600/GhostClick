@@ -264,7 +264,7 @@ public class EngineTests
         engine.Start();
 
         // Swapping the button mid-run must not change what the running plan emits.
-        profile.Action.Button = MouseButton.Right;
+        profile.Action.Inputs[0] = InputChord.Mouse(MouseButton.Right);
 
         var args = WaitForStop(stopped);
         Assert.Equal(3, args.ActionsPerformed);
@@ -283,8 +283,7 @@ public class EngineTests
         profile.Repeat.Mode = RepeatMode.FixedCount;
         profile.Repeat.Count = 4;
         profile.Interval.DelayMs = 1;
-        profile.Action.Kind = ActionKind.Keyboard;
-        profile.Action.Key = VirtualKey.E;
+        profile.Action.Inputs = [new InputChord(VirtualKey.E)];
         engine.Profile = profile;
 
         engine.Start();
@@ -307,9 +306,7 @@ public class EngineTests
         profile.Repeat.Mode = RepeatMode.FixedCount;
         profile.Repeat.Count = 3;
         profile.Interval.DelayMs = 1;
-        profile.Action.Kind = ActionKind.Keyboard;
-        profile.Action.Key = VirtualKey.C;
-        profile.Action.KeyModifiers = KeyModifiers.Control;
+        profile.Action.Inputs = [new InputChord(VirtualKey.C, KeyModifiers.Control)];
         engine.Profile = profile;
 
         engine.Start();

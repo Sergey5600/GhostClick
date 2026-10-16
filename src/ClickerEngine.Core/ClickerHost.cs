@@ -28,14 +28,15 @@ public sealed class ClickerHost : IDisposable
         IHotkeyService hotkeyService,
         IClock? clock = null,
         IScreenGeometry? screen = null,
-        IRandomSource? random = null)
+        IRandomSource? random = null,
+        IWindowProbe? windowProbe = null)
     {
         Injector = injector ?? throw new ArgumentNullException(nameof(injector));
         ProfileStore = profileStore ?? throw new ArgumentNullException(nameof(profileStore));
         Hotkeys = hotkeyService ?? throw new ArgumentNullException(nameof(hotkeyService));
 
         Screen = screen ?? CreateDefaultScreen();
-        Engine = new AutoClickerEngine(injector, clock, Screen, random);
+        Engine = new AutoClickerEngine(injector, clock, Screen, random, windowProbe);
         Profiles = new ProfileManager(profileStore);
         Recorder = new PointRecorder(injector);
         Controller = new HotkeyController(Hotkeys, Engine, Recorder);
@@ -66,9 +67,9 @@ public sealed class ClickerHost : IDisposable
     public HotkeyController Controller { get; }
 
     /// <summary>
-    /// The production wiring: <c>SendInput</c>, JSON profiles under <c>%APPDATA%\GhostClick</c>
-    /// and low-level global hooks. Falls back to the dry-run recorder off Windows so the
-    /// library is still constructible for tooling and tests.
+    /// The production wiring: <c>SendInput</c>, JSON profiles under <c>%APPDATA%\GhostClick</c>,
+    /// low-level global hooks and the Win32 window probe. Falls back to the dry-run recorder
+    /// off Windows so the library is still constructible for tooling and tests.
     /// </summary>
     /// <param name="profileRoot">Overrides the profile directory.</param>
     /// <param name="dryRun">Record input instead of injecting it.</param>
@@ -86,7 +87,9 @@ public sealed class ClickerHost : IDisposable
 
         var store = profileRoot is null ? new JsonProfileStore() : new JsonProfileStore(profileRoot);
 
-        return new ClickerHost(injector, store, hotkeys, screen: screen);
+        IWindowProbe? windowProbe = OperatingSystem.IsWindows() ? new Win32WindowProbe() : null;
+
+        return new ClickerHost(injector, store, hotkeys, screen: screen, windowProbe: windowProbe);
     }
 
     /// <summary>

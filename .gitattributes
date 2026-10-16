@@ -1,0 +1,14 @@
+# Normalize line endings for text, and never touch binary assets: the .editorconfig asks
+# editors for CRLF, and an icon run through any such conversion is a corrupt icon.
+* text=auto
+
+*.ico binary
+*.png binary
+*.jpg binary
+*.snk binary
+
+*.sln text eol=crlf
+*.csproj text eol=crlf
+*.xaml text eol=crlf
+*.manifest text eol=crlf
+*.sh text eol=lf

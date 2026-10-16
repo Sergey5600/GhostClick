@@ -9,6 +9,7 @@ using ClickerEngine.Core.Hotkeys;
 using ClickerEngine.Core.Input;
 using ClickerEngine.Core.Points;
 using ClickerEngine.Core.Profiles;
+using ClickMode = ClickerEngine.Core.Configuration.ClickMode;
 
 namespace ClickerEngine.DevUI;
 
@@ -51,7 +52,10 @@ public partial class MainWindow : Window
             IgnoredExtraInfo = live.ExtraInfoSignature,
         };
 
-        _host = new ClickerHost(_injector, new JsonProfileStore(), hotkeys, screen: screen);
+        // Holds clicks that would land on this window, and powers ActiveWindowOnly; silent in dry run.
+        var windowProbe = new DryRunAwareWindowProbe(new Win32WindowProbe(), _injector);
+
+        _host = new ClickerHost(_injector, new JsonProfileStore(), hotkeys, screen: screen, windowProbe: windowProbe);
 
         PopulateChoices();
         SubscribeToEngine();
@@ -415,13 +419,15 @@ public partial class MainWindow : Window
             NameBox.Text = profile.Name;
             ClickModeBox.SelectedItem = profile.Mode;
 
-            ActionKindBox.SelectedItem = profile.Action.Kind;
-            MouseButtonBox.SelectedItem = profile.Action.Button;
+            // The harness edits one input; the main UI can set several, which are kept.
+            var primary = profile.Action.Inputs.FirstOrDefault() ?? InputChord.Mouse(MouseButton.Left);
+            ActionKindBox.SelectedItem = primary.IsMouse ? ActionKind.Mouse : ActionKind.Keyboard;
+            MouseButtonBox.SelectedItem = primary.Key.TryGetMouseButton(out var button) ? button : MouseButton.Left;
             ClickTypeBox.SelectedItem = profile.Action.ClickType;
-            ActionKeyBox.SelectedItem = profile.Action.Key;
-            ActionCtrlBox.IsChecked = profile.Action.KeyModifiers.HasFlag(KeyModifiers.Control);
-            ActionAltBox.IsChecked = profile.Action.KeyModifiers.HasFlag(KeyModifiers.Alt);
-            ActionShiftBox.IsChecked = profile.Action.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            ActionKeyBox.SelectedItem = primary.IsMouse ? VirtualKey.Space : primary.Key;
+            ActionCtrlBox.IsChecked = primary.Modifiers.HasFlag(KeyModifiers.Control);
+            ActionAltBox.IsChecked = primary.Modifiers.HasFlag(KeyModifiers.Alt);
+            ActionShiftBox.IsChecked = primary.Modifiers.HasFlag(KeyModifiers.Shift);
             HoldDurationBox.Text = Text(profile.Action.HoldDurationMs);
             DoubleGapBox.Text = Text(profile.Action.DoubleClickGapMs);
 
@@ -497,11 +503,21 @@ public partial class MainWindow : Window
 
         profile.Mode = Selected(ClickModeBox, profile.Mode);
 
-        profile.Action.Kind = Selected(ActionKindBox, profile.Action.Kind);
-        profile.Action.Button = Selected(MouseButtonBox, profile.Action.Button);
+        var actionModifiers = ReadModifiers(ActionCtrlBox, ActionAltBox, ActionShiftBox);
+        var primary = Selected(ActionKindBox, ActionKind.Mouse) == ActionKind.Mouse
+            ? InputChord.Mouse(Selected(MouseButtonBox, MouseButton.Left), actionModifiers)
+            : new InputChord(Selected(ActionKeyBox, VirtualKey.Space), actionModifiers);
+
+        if (profile.Action.Inputs.Count == 0)
+        {
+            profile.Action.Inputs.Add(primary);
+        }
+        else
+        {
+            profile.Action.Inputs[0] = primary;
+        }
+
         profile.Action.ClickType = Selected(ClickTypeBox, profile.Action.ClickType);
-        profile.Action.Key = Selected(ActionKeyBox, profile.Action.Key);
-        profile.Action.KeyModifiers = ReadModifiers(ActionCtrlBox, ActionAltBox, ActionShiftBox);
         profile.Action.HoldDurationMs = ParseInt(HoldDurationBox, profile.Action.HoldDurationMs);
         profile.Action.DoubleClickGapMs = ParseInt(DoubleGapBox, profile.Action.DoubleClickGapMs);
 

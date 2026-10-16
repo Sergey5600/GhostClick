@@ -1,13 +1,16 @@
+using System.Text.Json.Serialization;
+
 namespace ClickerEngine.Core.Configuration;
 
-/// <summary>What the engine emits on every action tick: which button or which key.</summary>
+/// <summary>What the engine emits on every action tick: which buttons and keys.</summary>
 public sealed class ActionSettings
 {
-    /// <summary>Mouse clicks or keyboard presses.</summary>
-    public ActionKind Kind { get; set; } = ActionKind.Mouse;
-
-    /// <summary>Which mouse button to click when <see cref="Kind"/> is <see cref="ActionKind.Mouse"/>.</summary>
-    public MouseButton Button { get; set; } = MouseButton.Left;
+    /// <summary>
+    /// Everything pressed on an action tick. All entries go down together, are held, and come
+    /// up together, so <c>[LeftButton, E]</c> clicks while pressing E. The modifiers of every
+    /// entry are held around the whole action.
+    /// </summary>
+    public List<InputChord> Inputs { get; set; } = new() { InputChord.Mouse(MouseButton.Left) };
 
     /// <summary>Single or double click.</summary>
     public ClickType ClickType { get; set; } = ClickType.Single;
@@ -16,18 +19,40 @@ public sealed class ActionSettings
     public int DoubleClickGapMs { get; set; } = 40;
 
     /// <summary>
-    /// How long the button or key is held down, in milliseconds. Zero sends press and release
-    /// back to back; a small non-zero value (20-60 ms) looks more like a human.
+    /// How long the buttons and keys are held down, in milliseconds. Zero sends press and
+    /// release back to back; a small non-zero value (20-60 ms) looks more like a human.
     /// </summary>
     public int HoldDurationMs { get; set; }
 
-    /// <summary>Key pressed when <see cref="Kind"/> is <see cref="ActionKind.Keyboard"/>.</summary>
-    public VirtualKey Key { get; set; } = VirtualKey.Space;
+    /// <summary>
+    /// When true each press is held for a random time drawn from
+    /// [<see cref="MinHoldDurationMs"/>, <see cref="MaxHoldDurationMs"/>] instead of
+    /// <see cref="HoldDurationMs"/>.
+    /// </summary>
+    public bool RandomizeHoldDuration { get; set; }
 
-    /// <summary>Modifiers held around the key press.</summary>
-    public KeyModifiers KeyModifiers { get; set; } = KeyModifiers.None;
+    /// <summary>Shortest randomized hold, in milliseconds.</summary>
+    public int MinHoldDurationMs { get; set; } = 20;
 
-    public ActionSettings Clone() => (ActionSettings)MemberwiseClone();
+    /// <summary>Longest randomized hold, in milliseconds.</summary>
+    public int MaxHoldDurationMs { get; set; } = 50;
+
+    /// <summary>True when at least one input is a mouse button.</summary>
+    [JsonIgnore]
+    public bool UsesMouse => Inputs?.Any(i => i is { IsMouse: true }) == true;
+
+    /// <summary>True when at least one input is a keyboard key.</summary>
+    [JsonIgnore]
+    public bool UsesKeyboard => Inputs?.Any(i => i is { IsMouse: false }) == true;
+
+    public ActionSettings Clone()
+    {
+        var clone = (ActionSettings)MemberwiseClone();
+        // A hand-edited file can hold "inputs": null or null entries; normalise them here so
+        // the validator, not a NullReferenceException, reports the problem.
+        clone.Inputs = Inputs?.Where(i => i is not null).Select(i => i.Clone()).ToList() ?? new();
+        return clone;
+    }
 }
 
 /// <summary>Delay between consecutive actions, with optional randomization.</summary>
@@ -231,11 +256,14 @@ public sealed class HotkeySettings
     /// <summary>Pauses and resumes a running session without resetting counters.</summary>
     public HotkeyBinding Pause { get; set; } = new(VirtualKey.F7);
 
-    /// <summary>Always stops immediately, whatever the state.</summary>
-    public HotkeyBinding EmergencyStop { get; set; } = new(VirtualKey.Escape);
+    /// <summary>
+    /// Always stops immediately, whatever the state. A chord rather than a bare key such as
+    /// Esc, so it cannot fire by accident while typing or closing a dialog.
+    /// </summary>
+    public HotkeyBinding EmergencyStop { get; set; } = new(VirtualKey.F12, KeyModifiers.Control);
 
     /// <summary>Captures the current cursor position into the route / fixed point.</summary>
-    public HotkeyBinding RecordPoint { get; set; } = new(VirtualKey.F8);
+    public HotkeyBinding RecordPoint { get; set; } = new(VirtualKey.F9);
 
     public HotkeySettings Clone() => new()
     {
@@ -259,13 +287,21 @@ public sealed class SafetySettings
     public int MaxActionsPerRun { get; set; }
 
     /// <summary>
-    /// When true, a run also stops if the user physically moves the mouse away from the
-    /// expected position while the engine is driving the cursor.
+    /// When true, a run also stops if the user physically moves the mouse away from where
+    /// the engine expects it: the last position the engine moved it to, or - when clicking at
+    /// the cursor - where the cursor was when the run started.
     /// </summary>
     public bool StopOnUserCursorMove { get; set; }
 
     /// <summary>How far the cursor may deviate before <see cref="StopOnUserCursorMove"/> fires, in pixels.</summary>
     public int UserCursorMoveThresholdPixels { get; set; } = 120;
+
+    /// <summary>
+    /// When true the run locks onto the window it first acts on and holds its actions while
+    /// a different window would receive them (another window is in front, or the cursor is
+    /// over one). Needs a window probe; see <c>IWindowProbe</c>.
+    /// </summary>
+    public bool ActiveWindowOnly { get; set; }
 
     public SafetySettings Clone() => (SafetySettings)MemberwiseClone();
 }

@@ -55,6 +55,9 @@ public sealed class ActionPlanner
     private IEnumerable<EngineStep> PlanAtCursor()
     {
         long index = 0;
+        ScreenPoint anchor = default;
+        ScreenPoint? lastJittered = null;
+
         foreach (var _ in Iterations())
         {
             if (index > 0)
@@ -66,7 +69,18 @@ public sealed class ActionPlanner
             // is on, in which case we nudge around the current spot on purpose.
             if (_profile.Jitter.PositionJitterEnabled)
             {
-                var jittered = Clamp(Jitter.ApplyPosition(_cursor.GetCursorPosition(), _profile.Jitter, _random));
+                // Jitter around the spot the user aimed at, not around our own previous
+                // nudge: offsets taken from the last jittered position would add up into a
+                // random walk that slowly carries the cursor away. A cursor that is not where
+                // we left it has been moved by the user, which re-aims.
+                var cursor = _cursor.GetCursorPosition();
+                if (lastJittered != cursor)
+                {
+                    anchor = cursor;
+                }
+
+                var jittered = Clamp(Jitter.ApplyPosition(anchor, _profile.Jitter, _random));
+                lastJittered = jittered;
                 yield return EngineStep.MoveTo(jittered);
             }
 
@@ -202,35 +216,26 @@ public sealed class ActionPlanner
         }
     }
 
-    /// <summary>The press/release steps for one logical action, mouse or keyboard.</summary>
+    /// <summary>
+    /// The press/release steps for one logical action. Every input goes down in list order,
+    /// they are held together, then released in reverse order; the modifiers of all inputs
+    /// wrap the whole thing, double click included.
+    /// </summary>
     private IEnumerable<EngineStep> EmitAction()
     {
         var action = _profile.Action;
         int repeats = action.ClickType == ClickType.Double ? 2 : 1;
 
-        if (action.Kind == ActionKind.Mouse)
+        // The same key listed twice (say E and Ctrl+E) is still one physical key.
+        var inputs = action.Inputs?.Where(i => i is not null).ToArray() ?? Array.Empty<InputChord>();
+        var keys = inputs.Select(i => i.Key).Where(k => k != VirtualKey.None).Distinct().ToArray();
+        if (keys.Length == 0)
         {
-            for (int i = 0; i < repeats; i++)
-            {
-                if (i > 0 && action.DoubleClickGapMs > 0)
-                {
-                    yield return EngineStep.Wait(action.DoubleClickGapMs);
-                }
-
-                yield return EngineStep.MouseDown(action.Button);
-
-                if (action.HoldDurationMs > 0)
-                {
-                    yield return EngineStep.Wait(action.HoldDurationMs);
-                }
-
-                yield return EngineStep.MouseUp(action.Button, completesAction: i == repeats - 1);
-            }
-
             yield break;
         }
 
-        var modifiers = EnumerateModifiers(action.KeyModifiers).ToArray();
+        var modifierFlags = inputs.Aggregate(KeyModifiers.None, (all, i) => all | i.Modifiers);
+        var modifiers = EnumerateModifiers(modifierFlags).ToArray();
 
         foreach (var modifier in modifiers)
         {
@@ -244,14 +249,28 @@ public sealed class ActionPlanner
                 yield return EngineStep.Wait(action.DoubleClickGapMs);
             }
 
-            yield return EngineStep.KeyDown(action.Key);
-
-            if (action.HoldDurationMs > 0)
+            foreach (var key in keys)
             {
-                yield return EngineStep.Wait(action.HoldDurationMs);
+                yield return key.TryGetMouseButton(out var button)
+                    ? EngineStep.MouseDown(button)
+                    : EngineStep.KeyDown(key);
             }
 
-            yield return EngineStep.KeyUp(action.Key, completesAction: i == repeats - 1);
+            var hold = NextHoldDuration();
+            if (hold > 0)
+            {
+                yield return EngineStep.Wait(hold);
+            }
+
+            for (int k = keys.Length - 1; k >= 0; k--)
+            {
+                // Only the very last release completes the action, so a chord of three
+                // inputs is still one action and a double click is still one action.
+                bool completes = i == repeats - 1 && k == 0;
+                yield return keys[k].TryGetMouseButton(out var button)
+                    ? EngineStep.MouseUp(button, completesAction: completes)
+                    : EngineStep.KeyUp(keys[k], completesAction: completes);
+            }
         }
 
         // Release modifiers in reverse order, the way a human would.
@@ -259,6 +278,20 @@ public sealed class ActionPlanner
         {
             yield return EngineStep.KeyUp(modifiers[i], isModifier: true);
         }
+    }
+
+    /// <summary>How long the next press is held: fixed, or drawn from the configured range.</summary>
+    private int NextHoldDuration()
+    {
+        var action = _profile.Action;
+        if (!action.RandomizeHoldDuration)
+        {
+            return Math.Max(0, action.HoldDurationMs);
+        }
+
+        int min = Math.Max(0, Math.Min(action.MinHoldDurationMs, action.MaxHoldDurationMs));
+        int max = Math.Max(0, Math.Max(action.MinHoldDurationMs, action.MaxHoldDurationMs));
+        return _random.NextInt(min, max);
     }
 
     /// <summary>Interpolated cursor travel from wherever the cursor is now to a target.</summary>
