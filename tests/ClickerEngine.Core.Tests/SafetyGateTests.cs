@@ -129,6 +129,80 @@ public class SafetyGateTests
     }
 
     [Fact]
+    public void AfterAHold_TheTargetMustSettleBeforeTheFirstClick()
+    {
+        var injector = new RecordingInputInjector();
+        var probe = new FakeWindowProbe { UnderCursor = OwnWindow };
+        using var engine = CreateEngine(injector, probe, out var stopped);
+        engine.WindowSettleTime = TimeSpan.FromMilliseconds(200);
+        engine.Profile = FixedCount(1);
+
+        engine.Start();
+        Thread.Sleep(50);
+
+        var released = System.Diagnostics.Stopwatch.StartNew();
+        probe.UnderCursor = GameWindow;
+        Assert.True(SpinUntil(() => injector.Events.Count > 0));
+
+        Assert.True(released.ElapsedMilliseconds >= 150, $"Clicked after {released.ElapsedMilliseconds} ms.");
+        WaitForStop(stopped);
+    }
+
+    [Fact]
+    public void ActiveWindowOnly_DoesNotLockOntoAWindowTheMousePassedOver()
+    {
+        // Start from the clicker, cross a browser on the way, end up over the game: the run
+        // belongs to the game.
+        var injector = new RecordingInputInjector();
+        var probe = new FakeWindowProbe { UnderCursor = OwnWindow };
+        using var engine = CreateEngine(injector, probe, out var stopped);
+        engine.WindowSettleTime = TimeSpan.FromMilliseconds(150);
+
+        var profile = FixedCount(1000);
+        profile.Interval.DelayMs = 2;
+        profile.Safety.ActiveWindowOnly = true;
+        engine.Profile = profile;
+
+        engine.Start();
+        Thread.Sleep(40);
+        probe.UnderCursor = BrowserWindow;
+        Thread.Sleep(40);
+        probe.UnderCursor = GameWindow;
+
+        Assert.True(SpinUntil(() => engine.CurrentRunActions >= 3));
+
+        probe.UnderCursor = BrowserWindow;
+        Thread.Sleep(60);
+        long heldAt = engine.CurrentRunActions;
+        Thread.Sleep(150);
+        Assert.Equal(heldAt, engine.CurrentRunActions);
+
+        engine.Stop();
+        WaitForStop(stopped);
+    }
+
+    [Fact]
+    public void ActiveWindowOnly_HoldsAChordWhoseClickAndKeysWouldGoToDifferentWindows()
+    {
+        var injector = new RecordingInputInjector();
+        var probe = new FakeWindowProbe { UnderCursor = GameWindow, Foreground = BrowserWindow };
+        using var engine = CreateEngine(injector, probe, out var stopped);
+
+        var profile = FixedCount(2);
+        profile.Action.Inputs = [InputChord.Mouse(MouseButton.Left), new InputChord(VirtualKey.E)];
+        profile.Safety.ActiveWindowOnly = true;
+        engine.Profile = profile;
+
+        engine.Start();
+        Thread.Sleep(100);
+        Assert.Empty(injector.Events);
+
+        probe.Foreground = GameWindow;
+
+        Assert.Equal(StopReason.Completed, WaitForStop(stopped).Reason);
+    }
+
+    [Fact]
     public void Pause_StillWorksWhileAnActionIsHeld()
     {
         var injector = new RecordingInputInjector();
@@ -296,6 +370,7 @@ public class SafetyGateTests
         var engine = new AutoClickerEngine(injector, new SystemClock(), Screen, NeutralRandomSource.Instance, probe)
         {
             WindowPollInterval = TimeSpan.FromMilliseconds(2),
+            WindowSettleTime = TimeSpan.FromMilliseconds(10),
         };
 
         var signal = new StopSignal();

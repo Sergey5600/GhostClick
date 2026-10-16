@@ -122,6 +122,13 @@ public sealed class AutoClickerEngine : IDisposable
     /// <summary>How often a held action re-checks whether its target window is acceptable.</summary>
     public TimeSpan WindowPollInterval { get; set; } = TimeSpan.FromMilliseconds(25);
 
+    /// <summary>
+    /// After an action was held for its window, how long the same acceptable window must stay
+    /// targeted before the action goes. Carrying the mouse from the clicker to the game passes
+    /// over other windows on the way; without this the first of them would get the click.
+    /// </summary>
+    public TimeSpan WindowSettleTime { get; set; } = TimeSpan.FromMilliseconds(300);
+
     /// <summary>The injector backend in use, for display.</summary>
     public IInputInjector Injector => _injector;
 
@@ -389,6 +396,10 @@ public sealed class AutoClickerEngine : IDisposable
         out StopReason breach)
     {
         bool startsAction = !context.InAction && step.Kind is EngineStepKind.MouseDown or EngineStepKind.KeyDown;
+        bool held = false;
+        long target = 0;
+        long settling = 0;
+        TimeSpan settlingSince = TimeSpan.Zero;
 
         while (true)
         {
@@ -400,31 +411,57 @@ public sealed class AutoClickerEngine : IDisposable
                 return false;
             }
 
-            if (!startsAction || IsTargetWindowAcceptable(profile, context))
+            if (!startsAction)
             {
-                break;
+                return true;
             }
 
-            // Whatever the user does with the mouse while we wait is not a deviation from our
-            // plan; the reference point is taken again once the action can go ahead.
-            if (profile.Target.Mode == TargetMode.CurrentCursor)
+            if (TryGetTargetWindow(profile, context, out target))
             {
-                context.ExpectedCursor = null;
+                if (!held)
+                {
+                    break;
+                }
+
+                // Coming out of a hold, the target has to stay put for a moment first.
+                if (target != settling)
+                {
+                    settling = target;
+                    settlingSince = _clock.Elapsed;
+                }
+                else if (_clock.Elapsed - settlingSince >= WindowSettleTime)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                held = true;
+                settling = 0;
+
+                // Whatever the user does with the mouse while we wait is not a deviation from
+                // our plan; the reference point is taken again once the action can go ahead.
+                if (profile.Target.Mode == TargetMode.CurrentCursor)
+                {
+                    context.ExpectedCursor = null;
+                }
             }
 
             _clock.Wait(WindowPollInterval, token);
         }
 
-        if (startsAction)
-        {
-            context.InAction = true;
+        context.InAction = true;
 
-            // Clicking at the cursor: the user aims, then lets go of the mouse. The first
-            // action marks where it was left, so moving it later counts as taking it back.
-            if (profile.Target.Mode == TargetMode.CurrentCursor && context.ExpectedCursor is null)
-            {
-                context.ExpectedCursor = _injector.GetCursorPosition();
-            }
+        if (profile.Safety.ActiveWindowOnly && context.LockedWindow == 0)
+        {
+            context.LockedWindow = target;
+        }
+
+        // Clicking at the cursor: the user aims, then lets go of the mouse. The first action
+        // marks where it was left, so moving it later counts as taking it back.
+        if (profile.Target.Mode == TargetMode.CurrentCursor && context.ExpectedCursor is null)
+        {
+            context.ExpectedCursor = _injector.GetCursorPosition();
         }
 
         return true;
@@ -434,48 +471,39 @@ public sealed class AutoClickerEngine : IDisposable
     /// False while the action about to start would land in the wrong window: one of this
     /// process's own windows, or - with <see cref="SafetySettings.ActiveWindowOnly"/> - any
     /// window other than the one the run locked onto. Clicks are judged by the window under
-    /// the cursor, key presses by the foreground window.
+    /// the cursor, key presses by the foreground window. <paramref name="target"/> is the
+    /// window the action would go to (0 when unknown), which is what a run locks onto.
     /// </summary>
-    private bool IsTargetWindowAcceptable(ClickerProfile profile, RunContext context)
+    private bool TryGetTargetWindow(ClickerProfile profile, RunContext context, out long target)
     {
+        target = 0;
         if (_windowProbe is null)
         {
             return true;
         }
 
         var action = profile.Action;
+        long clicked = action.UsesMouse ? _windowProbe.GetWindowAt(_injector.GetCursorPosition()) : 0;
+        long typed = action.UsesKeyboard ? _windowProbe.GetForegroundWindow() : 0;
+        target = clicked != 0 ? clicked : typed;
 
-        if (action.UsesMouse && !IsAcceptable(_windowProbe.GetWindowAt(_injector.GetCursorPosition())))
+        if (IsOwn(clicked) || IsOwn(typed))
         {
             return false;
         }
 
-        return !action.UsesKeyboard || IsAcceptable(_windowProbe.GetForegroundWindow());
-
-        bool IsAcceptable(long window)
+        if (!profile.Safety.ActiveWindowOnly)
         {
-            if (window == 0)
-            {
-                return true;
-            }
-
-            if (_windowProbe.IsOwnWindow(window))
-            {
-                return false;
-            }
-
-            if (!profile.Safety.ActiveWindowOnly)
-            {
-                return true;
-            }
-
-            if (context.LockedWindow == 0)
-            {
-                context.LockedWindow = window;
-            }
-
-            return context.LockedWindow == window;
+            return true;
         }
+
+        // Before the lock exists, clicks and keys must at least agree on one window.
+        long expected = context.LockedWindow != 0 ? context.LockedWindow : target;
+        return Matches(clicked) && Matches(typed);
+
+        bool IsOwn(long window) => window != 0 && _windowProbe.IsOwnWindow(window);
+
+        bool Matches(long window) => window == 0 || expected == 0 || window == expected;
     }
 
     private void Execute(EngineStep step, ClickerProfile profile, RunContext context, CancellationToken token)
