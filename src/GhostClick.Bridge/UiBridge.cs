@@ -100,6 +100,8 @@ public sealed class UiBridge : IDisposable
             Log("Горячие клавиши недоступны: " + ex.Message);
         }
 
+        // As in AfterProfileSwap: «Бесконечно» means no run time limit.
+        ProfileMapper.ApplyInfiniteRepeat(Current);
         _savedJson = ProfileSerializer.Serialize(Current);
         Log($"Профиль «{Current.Name}» загружен");
     }
@@ -453,6 +455,11 @@ public sealed class UiBridge : IDisposable
 
     private void AfterProfileSwap()
     {
+        // Profiles saved before the interface existed carry the engine's ten-minute limit
+        // under «Бесконечно». Lift it here, before taking the saved snapshot: the profile runs
+        // as the interface shows it without looking edited, and the file catches up on the
+        // next save. The engine holds this same object, so the next run already sees it.
+        ProfileMapper.ApplyInfiniteRepeat(Current);
         _savedJson = ProfileSerializer.Serialize(Current);
 
         if (_listening)

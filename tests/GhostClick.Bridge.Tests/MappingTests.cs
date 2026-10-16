@@ -200,6 +200,44 @@ public class MappingTests
     }
 
     [Fact]
+    public void Apply_InfiniteRepeatLiftsTheRunTimeLimit()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Safety.MaxRunDurationSeconds = 600;
+
+        var dto = ProfileMapper.ToDto(profile);
+        dto.Repeat = "inf";
+        ProfileMapper.Apply(dto, profile);
+
+        Assert.Equal(RepeatMode.Infinite, profile.Repeat.Mode);
+        Assert.Equal(0, profile.Safety.MaxRunDurationSeconds);
+    }
+
+    [Fact]
+    public void Apply_FixedRepeatKeepsTheRunTimeLimit()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Safety.MaxRunDurationSeconds = 90;
+
+        ProfileMapper.Apply(ProfileMapper.ToDto(profile), profile);
+
+        Assert.Equal(90, profile.Safety.MaxRunDurationSeconds);
+    }
+
+    [Fact]
+    public void Apply_OfAnUnchangedInfiniteProfileLeavesItIdentical()
+    {
+        var profile = UiDefaults.CreateProfile("Default");
+        var before = ProfileSerializer.Serialize(profile);
+
+        ProfileMapper.Apply(ProfileMapper.ToDto(profile), profile);
+
+        Assert.Equal(before, ProfileSerializer.Serialize(profile));
+    }
+
+    [Fact]
     public void Apply_KeepsSettingsWhenThePageSendsSomethingItCannotHaveMeant()
     {
         var profile = ClickerProfile.CreateDefault();
@@ -227,6 +265,8 @@ public class MappingTests
         Assert.True(profile.Action.RandomizeHoldDuration);
         Assert.True(profile.Safety.ActiveWindowOnly);
         Assert.False(profile.Safety.StopOnUserCursorMove);
+        Assert.Equal(RepeatMode.Infinite, profile.Repeat.Mode);
+        Assert.Equal(0, profile.Safety.MaxRunDurationSeconds);
         Assert.Empty(ProfileValidator.Validate(profile));
     }
 }

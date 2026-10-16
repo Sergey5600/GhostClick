@@ -90,6 +90,90 @@ public class UiBridgeTests
     }
 
     [Fact]
+    public void AnInfiniteProfileSavedWithATimeLimitRunsWithoutItAndDoesNotLookEdited()
+    {
+        // Profiles from before the interface carry the engine's ten-minute limit.
+        var store = new InMemoryProfileStore();
+        store.Save(ClickerProfile.CreateDefault("Default"));
+        store.LastUsedProfileName = "Default";
+        Assert.Equal(600, store.Load("Default").Safety.MaxRunDurationSeconds);
+
+        using var f = new Fixture(store);
+        f.Ready();
+
+        Assert.Equal(0, f.Host.Engine.Profile.Safety.MaxRunDurationSeconds);
+        Assert.False(f.Last("init").GetProperty("profile").GetProperty("dirty").GetBoolean());
+
+        // The file catches up on the next save.
+        f.Send(new { type = "saveProfile" });
+        Assert.Equal(0, store.Load("Default").Safety.MaxRunDurationSeconds);
+    }
+
+    [Fact]
+    public void LoadingAnInfiniteProfileLiftsItsTimeLimit()
+    {
+        var store = new InMemoryProfileStore();
+        store.Save(UiDefaults.CreateProfile("Default"));
+        var farm = ClickerProfile.CreateDefault("Farm");
+        farm.Safety.MaxRunDurationSeconds = 600;
+        store.Save(farm);
+        store.LastUsedProfileName = "Default";
+
+        using var f = new Fixture(store);
+        f.Ready();
+        f.Send(new { type = "loadProfile", name = "Farm" });
+
+        Assert.Equal("Farm", f.Host.Engine.Profile.Name);
+        Assert.Equal(0, f.Host.Engine.Profile.Safety.MaxRunDurationSeconds);
+        Assert.False(f.Last("profile").GetProperty("profile").GetProperty("dirty").GetBoolean());
+    }
+
+    [Fact]
+    public void ChoosingInfiniteLiftsTheTimeLimitAndFixedKeepsIt()
+    {
+        var store = new InMemoryProfileStore();
+        var timed = ClickerProfile.CreateDefault("Default");
+        timed.Repeat.Mode = RepeatMode.FixedCount;
+        timed.Safety.MaxRunDurationSeconds = 600;
+        store.Save(timed);
+        store.LastUsedProfileName = "Default";
+
+        using var f = new Fixture(store);
+        f.Ready();
+        Assert.Equal(600, f.Host.Engine.Profile.Safety.MaxRunDurationSeconds);
+
+        f.SetProfile(data => data["repeat"] = "inf");
+
+        Assert.Equal(0, f.Host.Engine.Profile.Safety.MaxRunDurationSeconds);
+        Assert.True(f.Last("dirty").GetProperty("value").GetBoolean());
+    }
+
+    [Fact]
+    public void AnInfiniteRunOutlivesTheTimeLimitItWasSavedWith()
+    {
+        var store = new InMemoryProfileStore();
+        var profile = ClickerProfile.CreateDefault("Default");
+        profile.Interval.DelayMs = 5;
+        profile.Safety.MaxRunDurationSeconds = 1;
+        store.Save(profile);
+        store.LastUsedProfileName = "Default";
+
+        using var f = new Fixture(store);
+        f.Ready();
+        f.Send(new { type = "start" });
+        f.PumpUntil(() => f.Host.Engine.State == EngineState.Running);
+
+        Thread.Sleep(1500);
+        f.Pump();
+
+        Assert.Equal(EngineState.Running, f.Host.Engine.State);
+        Assert.DoesNotContain(f.Logs(), l => l.StartsWith("Лимит времени", StringComparison.Ordinal));
+
+        f.Send(new { type = "stop" });
+        f.PumpUntil(() => f.Logs().Any(l => l.StartsWith("Остановлено", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public void Revert_RestoresTheSavedProfile()
     {
         using var f = new Fixture();
