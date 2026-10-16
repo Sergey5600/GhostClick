@@ -39,6 +39,12 @@ public sealed class ProfileManager
         }
     }
 
+    /// <summary>
+    /// Builds the profile behind <see cref="CreateNew"/> and the first-run default. A front end
+    /// replaces it to give new profiles its own starting values.
+    /// </summary>
+    public Func<string, ClickerProfile> NewProfileFactory { get; set; } = name => ClickerProfile.CreateDefault(name);
+
     /// <summary>Every stored profile name.</summary>
     public IReadOnlyList<string> AvailableProfiles => _store.List();
 
@@ -61,7 +67,7 @@ public sealed class ProfileManager
             return first;
         }
 
-        var fallback = ClickerProfile.CreateDefault();
+        var fallback = NewProfileFactory("Default");
         Current = fallback;
         Save();
         return fallback;
@@ -121,7 +127,8 @@ public sealed class ProfileManager
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        var profile = ClickerProfile.CreateDefault(name);
+        var profile = NewProfileFactory(name);
+        profile.Name = name;
         Current = profile;
         Save();
         return profile;

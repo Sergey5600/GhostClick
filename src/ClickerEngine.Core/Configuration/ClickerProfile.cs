@@ -7,8 +7,14 @@ namespace ClickerEngine.Core.Configuration;
 /// </summary>
 public sealed class ClickerProfile
 {
+    /// <summary>
+    /// The schema version written by this build. Version 1 described the action as a single
+    /// button or key; version 2 replaced that with <see cref="ActionSettings.Inputs"/>.
+    /// </summary>
+    public const int CurrentVersion = 2;
+
     /// <summary>Schema version, so future readers can migrate old files.</summary>
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = CurrentVersion;
 
     /// <summary>Profile name; also the file name used by the JSON profile store.</summary>
     public string Name { get; set; } = "Default";
@@ -51,6 +57,9 @@ public sealed class ClickerProfile
         Safety = Safety.Clone(),
     };
 
-    /// <summary>The stage-1 defaults: F6 toggles 100 ms left clicks at the cursor.</summary>
+    /// <summary>
+    /// The stage-1 defaults: F6 toggles 100 ms left clicks at the cursor, Ctrl+F12 stops
+    /// everything.
+    /// </summary>
     public static ClickerProfile CreateDefault(string name = "Default") => new() { Name = name };
 }

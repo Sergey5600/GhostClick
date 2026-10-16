@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClickerEngine.Core.Configuration;
 
@@ -12,6 +13,12 @@ public static class ProfileSerializer
 {
     /// <summary>The options every read and write goes through.</summary>
     public static readonly JsonSerializerOptions Options = CreateOptions();
+
+    private static readonly JsonDocumentOptions DocumentOptions = new()
+    {
+        CommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+    };
 
     public static string Serialize(ClickerProfile profile)
     {
@@ -31,7 +38,20 @@ public static class ProfileSerializer
 
         try
         {
-            return JsonSerializer.Deserialize<ClickerProfile>(json, Options)
+            var root = JsonNode.Parse(json, documentOptions: DocumentOptions);
+            if (root is null)
+            {
+                throw new ProfileFormatException("The profile document was empty.");
+            }
+
+            if (root is not JsonObject document)
+            {
+                throw new ProfileFormatException("The profile document is not a JSON object.");
+            }
+
+            MigrateSingleAction(document);
+
+            return document.Deserialize<ClickerProfile>(Options)
                 ?? throw new ProfileFormatException("The profile document was empty.");
         }
         catch (JsonException ex)
@@ -42,6 +62,37 @@ public static class ProfileSerializer
 
     /// <summary>A deep copy via a JSON round trip; used where reference sharing would bite.</summary>
     public static ClickerProfile DeepCopy(ClickerProfile profile) => Deserialize(Serialize(profile));
+
+    /// <summary>
+    /// Schema 1 described the action as one button (<c>kind: mouse</c>) or one key with
+    /// modifiers (<c>kind: keyboard</c>). Schema 2 has a list of inputs instead; an old file
+    /// becomes a list holding that single input, so it keeps doing exactly what it did.
+    /// </summary>
+    private static void MigrateSingleAction(JsonObject document)
+    {
+        if (document["action"] is not JsonObject action || action.ContainsKey("inputs"))
+        {
+            return;
+        }
+
+        var chord = Read(action["kind"], ActionKind.Mouse) == ActionKind.Keyboard
+            ? new InputChord(Read(action["key"], VirtualKey.Space), Read(action["keyModifiers"], KeyModifiers.None))
+            : InputChord.Mouse(Read(action["button"], MouseButton.Left));
+
+        action["inputs"] = JsonSerializer.SerializeToNode(new List<InputChord> { chord }, Options);
+        action.Remove("kind");
+        action.Remove("button");
+        action.Remove("key");
+        action.Remove("keyModifiers");
+
+        if (Read(document["version"], 1) < ClickerProfile.CurrentVersion)
+        {
+            document["version"] = ClickerProfile.CurrentVersion;
+        }
+    }
+
+    private static T Read<T>(JsonNode? node, T fallback) =>
+        node is null ? fallback : node.Deserialize<T>(Options) ?? fallback;
 
     private static JsonSerializerOptions CreateOptions()
     {

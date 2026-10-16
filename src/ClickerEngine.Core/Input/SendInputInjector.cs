@@ -104,7 +104,8 @@ public sealed class SendInputInjector : IInputInjector
         VirtualKey.PageUp or VirtualKey.PageDown or
         VirtualKey.Left or VirtualKey.Right or VirtualKey.Up or VirtualKey.Down or
         VirtualKey.NumLock or VirtualKey.PrintScreen or VirtualKey.Divide or
-        VirtualKey.RightControl or VirtualKey.RightAlt => true,
+        VirtualKey.RightControl or VirtualKey.RightAlt or
+        VirtualKey.LeftWindows or VirtualKey.RightWindows or VirtualKey.Apps => true,
         _ => false,
     };
 

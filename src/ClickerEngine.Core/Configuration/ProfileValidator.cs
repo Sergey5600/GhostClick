@@ -93,16 +93,34 @@ public static class ProfileValidator
             errors.Add(new ValidationError("Action.DoubleClickGapMs", "Double click gap must not be negative."));
         }
 
-        if (action.Kind == ActionKind.Keyboard && action.Key == VirtualKey.None)
+        if (action.Inputs is null || action.Inputs.Count == 0)
         {
-            errors.Add(new ValidationError("Action.Key", "Keyboard mode needs a key to press."));
+            errors.Add(new ValidationError("Action.Inputs", "Choose at least one key or mouse button to press."));
+        }
+        else
+        {
+            for (int i = 0; i < action.Inputs.Count; i++)
+            {
+                if (action.Inputs[i] is null || action.Inputs[i].Key == VirtualKey.None)
+                {
+                    errors.Add(new ValidationError($"Action.Inputs[{i}]", "Every input needs a key or mouse button."));
+                }
+            }
         }
 
-        if (action.Kind == ActionKind.Keyboard && action.Key.IsMouseButton())
+        if (action.RandomizeHoldDuration)
         {
-            errors.Add(new ValidationError(
-                "Action.Key",
-                $"{action.Key} is a mouse button; use Action.Kind = Mouse for it."));
+            if (action.MinHoldDurationMs < 0)
+            {
+                errors.Add(new ValidationError("Action.MinHoldDurationMs", "Minimum hold must not be negative."));
+            }
+
+            if (action.MaxHoldDurationMs < action.MinHoldDurationMs)
+            {
+                errors.Add(new ValidationError(
+                    "Action.MaxHoldDurationMs",
+                    $"Maximum hold ({action.MaxHoldDurationMs} ms) must be >= minimum hold ({action.MinHoldDurationMs} ms)."));
+            }
         }
     }
 

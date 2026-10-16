@@ -1,15 +1,14 @@
 using ClickerEngine.Core.Configuration;
-using ClickerEngine.Core.Input;
 
-namespace ClickerEngine.DevUI;
+namespace ClickerEngine.Core.Input;
 
 /// <summary>
 /// Forwards to the real injector or to a recorder, depending on a flag the user can flip at
 /// runtime.
 /// <para>
-/// This is what makes the dev harness safe to poke at: with dry run on you can watch the
-/// exact input stream a profile produces in the log without the mouse actually running away
-/// across the desktop.
+/// This is what makes a front end safe to poke at: with dry run on you can watch the exact
+/// input stream a profile produces without the mouse actually running away across the
+/// desktop.
 /// </para>
 /// </summary>
 public sealed class SwitchableInputInjector : IInputInjector
@@ -57,7 +56,7 @@ public sealed class SwitchableInputInjector : IInputInjector
     }
 
     /// <summary>
-    /// Re-syncs the simulated cursor with the real one. The harness calls this when a run
+    /// Re-syncs the simulated cursor with the real one. Front ends call this when a run
     /// starts, so each dry run begins from where the mouse actually is.
     /// </summary>
     public void ResetDryRunCursor() => _seeded = false;
@@ -71,4 +70,26 @@ public sealed class SwitchableInputInjector : IInputInjector
     public void KeyDown(VirtualKey key) => Active.KeyDown(key);
 
     public void KeyUp(VirtualKey key) => Active.KeyUp(key);
+}
+
+/// <summary>
+/// Passes window queries through to a real probe only while input is real. In dry run nothing
+/// reaches any window, so there is nothing to hold for: every answer is "unknown".
+/// </summary>
+public sealed class DryRunAwareWindowProbe : IWindowProbe
+{
+    private readonly IWindowProbe _inner;
+    private readonly SwitchableInputInjector _injector;
+
+    public DryRunAwareWindowProbe(IWindowProbe inner, SwitchableInputInjector injector)
+    {
+        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        _injector = injector ?? throw new ArgumentNullException(nameof(injector));
+    }
+
+    public long GetForegroundWindow() => _injector.DryRun ? 0 : _inner.GetForegroundWindow();
+
+    public long GetWindowAt(ScreenPoint point) => _injector.DryRun ? 0 : _inner.GetWindowAt(point);
+
+    public bool IsOwnWindow(long window) => !_injector.DryRun && _inner.IsOwnWindow(window);
 }

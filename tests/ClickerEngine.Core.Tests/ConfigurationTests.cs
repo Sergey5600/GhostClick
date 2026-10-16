@@ -13,11 +13,11 @@ public class ConfigurationTests
 
         Assert.Empty(ProfileValidator.Validate(profile));
         Assert.Equal(ClickMode.Toggle, profile.Mode);
-        Assert.Equal(ActionKind.Mouse, profile.Action.Kind);
-        Assert.Equal(MouseButton.Left, profile.Action.Button);
+        Assert.Equal(InputChord.Mouse(MouseButton.Left), Assert.Single(profile.Action.Inputs));
         Assert.Equal(TargetMode.CurrentCursor, profile.Target.Mode);
         Assert.Equal(VirtualKey.F6, profile.Hotkeys.StartStop.Key);
-        Assert.Equal(VirtualKey.Escape, profile.Hotkeys.EmergencyStop.Key);
+        Assert.Equal(new HotkeyBinding(VirtualKey.F12, KeyModifiers.Control), profile.Hotkeys.EmergencyStop);
+        Assert.Equal(VirtualKey.F9, profile.Hotkeys.RecordPoint.Key);
         Assert.True(profile.Safety.FailsafeEnabled);
     }
 
@@ -63,23 +63,44 @@ public class ConfigurationTests
     }
 
     [Fact]
-    public void Validator_RequiresAKeyInKeyboardMode()
+    public void Validator_RequiresAtLeastOneInput()
     {
         var profile = ClickerProfile.CreateDefault();
-        profile.Action.Kind = ActionKind.Keyboard;
-        profile.Action.Key = VirtualKey.None;
+        profile.Action.Inputs = [];
 
-        Assert.Contains(ProfileValidator.Validate(profile), e => e.Path == "Action.Key");
+        Assert.Contains(ProfileValidator.Validate(profile), e => e.Path == "Action.Inputs");
     }
 
     [Fact]
-    public void Validator_RejectsAMouseButtonUsedAsAKeyboardKey()
+    public void Validator_RejectsAnInputWithoutAKey()
     {
         var profile = ClickerProfile.CreateDefault();
-        profile.Action.Kind = ActionKind.Keyboard;
-        profile.Action.Key = VirtualKey.LeftButton;
+        profile.Action.Inputs = [InputChord.Mouse(MouseButton.Left), new InputChord(VirtualKey.None)];
 
-        Assert.Contains(ProfileValidator.Validate(profile), e => e.Path == "Action.Key");
+        Assert.Contains(ProfileValidator.Validate(profile), e => e.Path == "Action.Inputs[1]");
+    }
+
+    [Fact]
+    public void Validator_RejectsAnInvertedHoldRange()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Action.RandomizeHoldDuration = true;
+        profile.Action.MinHoldDurationMs = 90;
+        profile.Action.MaxHoldDurationMs = 30;
+
+        Assert.Contains(ProfileValidator.Validate(profile), e => e.Path == "Action.MaxHoldDurationMs");
+    }
+
+    [Fact]
+    public void Clone_CopiesTheInputListRatherThanSharingIt()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        var clone = profile.Clone();
+
+        clone.Action.Inputs.Add(new InputChord(VirtualKey.E));
+        clone.Action.Inputs[0].Key = VirtualKey.RightButton;
+
+        Assert.Equal(InputChord.Mouse(MouseButton.Left), Assert.Single(profile.Action.Inputs));
     }
 
     [Fact]
