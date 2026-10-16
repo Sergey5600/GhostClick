@@ -2,17 +2,16 @@
 ;
 ; Takes the published app folder and produces one GhostClick-Setup-<version>.exe that:
 ;   - installs for the current user, no administrator prompt, into %LocalAppData%\Programs
-;     (like Discord or the VS Code user installer); /ALLUSERS on the command line installs
-;     into Program Files instead;
+;     (like Discord or the VS Code user installer);
 ;   - adds GhostClick to the Start menu and, unless unticked, to the desktop;
 ;   - installs the Microsoft Edge WebView2 Runtime if the machine has none;
-;   - closes a running GhostClick before upgrading or uninstalling it;
+;   - asks for a running GhostClick to be closed before upgrading or uninstalling it;
 ;   - registers an uninstaller that also offers to remove the user's profiles.
 ;
-; CI builds it (.github/workflows/windows-build.yml). By hand, from the repository root:
+; CI builds it (.github/workflows/windows-build.yml). By hand, from the repository root in cmd:
 ;   dotnet publish src/GhostClick.App -c Release -r win-x64 --self-contained true -p:DebugType=none -p:PublishDocumentationFiles=false -o publish/app
-;   (download https://go.microsoft.com/fwlink/p/?LinkId=2124703 to installer\MicrosoftEdgeWebview2Setup.exe)
-;   ISCC.exe installer\GhostClick.iss /DAppVersion=1.0.0
+;   curl.exe -L -o installer\MicrosoftEdgeWebview2Setup.exe "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+;   "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" installer\GhostClick.iss /DAppVersion=1.0.0
 
 #define AppName "GhostClick"
 #define AppExe "GhostClick.exe"
@@ -51,20 +50,21 @@ VersionInfoProductName={#AppName}
 VersionInfoProductTextVersion={#AppVersion}
 VersionInfoDescription={#AppName} Setup
 
-; Per-user by default; {autopf} is then %LocalAppData%\Programs.
+; Per-user only; {autopf} is then %LocalAppData%\Programs. There is deliberately no
+; all-users mode: a later per-user upgrade would not find such a copy and would install a
+; second one next to it.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=commandline
 DefaultDirName={autopf}\{#AppName}
 DisableProgramGroupPage=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 
-; Welcome -> folder (first install only) -> desktop shortcut -> install -> finish.
+; Welcome -> folder (first install only) -> desktop shortcut -> ready («Установить») ->
+; install -> finish.
 WizardStyle=modern
 DisableWelcomePage=no
 DisableDirPage=auto
-DisableReadyPage=yes
 ShowLanguageDialog=no
 WizardImageFile=art\WizardImage-100.bmp,art\WizardImage-125.bmp,art\WizardImage-150.bmp,art\WizardImage-175.bmp,art\WizardImage-200.bmp
 WizardSmallImageFile=art\WizardSmallImage-100.bmp,art\WizardSmallImage-125.bmp,art\WizardSmallImage-150.bmp,art\WizardSmallImage-175.bmp,art\WizardSmallImage-200.bmp
@@ -73,7 +73,7 @@ UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
 
 ; GhostClick holds this mutex while it runs (see Program.cs): setup and the uninstaller ask
-; to close it first, so no file is replaced or removed under a running clicker.
+; for it to be closed first, so no file is replaced or removed under a running clicker.
 AppMutex=GhostClick.SingleInstance
 SetupMutex=GhostClick.Setup
 CloseApplications=yes
@@ -86,6 +86,7 @@ SolidCompression=yes
 LZMAUseSeparateProcess=yes
 
 [Languages]
+; The first entry is the fallback: Russian, like the app itself. English only on English Windows.
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
@@ -99,8 +100,8 @@ english.RemoveProfiles=Also remove your GhostClick profiles (assigned keys, rout
 
 [Messages]
 ; Replaces the stock "close all other applications" welcome text.
-russian.WelcomeLabel2=Будет установлен [name/ver].%n%nGhostClick нажимает назначенные клавиши и кнопки мыши за вас: по таймеру, по точкам маршрута, с горячими клавишами старта, паузы и аварийной остановки.%n%nРекомендуется закрыть GhostClick, если он уже запущен.
-english.WelcomeLabel2=This will install [name/ver] on your computer.%n%nGhostClick presses the keys and mouse buttons you assign for you: on a timer, along a route of points, with hotkeys to start, pause and stop it.%n%nIt is recommended that you close GhostClick if it is running.
+russian.WelcomeLabel2=Будет установлен [name/ver].%n%nGhostClick нажимает назначенные клавиши и кнопки мыши за вас: по таймеру, по точкам маршрута, с горячими клавишами старта, паузы и аварийной остановки.
+english.WelcomeLabel2=This will install [name/ver] on your computer.%n%nGhostClick presses the keys and mouse buttons you assign for you: on a timer, along a route of points, with hotkeys to start, pause and stop it.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -160,15 +161,30 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  Profiles: String;
+  Cache, Profiles: String;
+  Attempt: Integer;
 begin
   if CurUninstallStep <> usPostUninstall then
     Exit;
 
-  { Profiles are the user's work: ask, default to keeping them, and keep them silently in a
-    silent uninstall. }
+  { The page's browser processes outlive GhostClick by a moment and can still hold the cache
+    when [UninstallDelete] runs right after the app was closed: retry for up to 10 seconds. }
+  Cache := ExpandConstant('{localappdata}\{#AppName}');
+  for Attempt := 1 to 20 do
+  begin
+    if not DirExists(Cache) then
+      Break;
+    if DelTree(Cache, True, True, True) then
+      Break;
+    Sleep(500);
+  end;
+
+  { Profiles are the user's work: ask, default to keeping them, and keep them without asking
+    in a silent uninstall - including the /SILENT one Windows tools run, which does not
+    suppress message boxes. }
   Profiles := ExpandConstant('{userappdata}\{#AppName}');
-  if DirExists(Profiles) and
-     (SuppressibleMsgBox(CustomMessage('RemoveProfiles'), mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES) then
+  if UninstallSilent or not DirExists(Profiles) then
+    Exit;
+  if MsgBox(CustomMessage('RemoveProfiles'), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
     DelTree(Profiles, True, True, True);
 end;

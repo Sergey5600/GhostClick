@@ -291,15 +291,19 @@ Windows-машина собирает всё решение, гоняет оба
 `installer/GhostClick.iss` — сценарий Inno Setup 6.3. Что он делает:
 
 * ставит в `%LocalAppData%\Programs\GhostClick` без запроса прав администратора (как
-  Discord или VS Code; `/ALLUSERS` в командной строке ставит в Program Files для всех);
+  Discord или VS Code). Режима «для всех пользователей» нет намеренно: обычное обновление
+  не нашло бы такую копию и поставило бы вторую рядом;
 * создаёт ярлык в «Пуске» и, по галочке (включена), на рабочем столе;
 * ставит WebView2 Runtime с помощью встроенного загрузчика Microsoft, если его нет;
-* закрывает запущенный GhostClick перед обновлением или удалением (мьютекс
-  `GhostClick.SingleInstance` из `Program.cs`);
+* просит закрыть запущенный GhostClick перед обновлением или удалением (мьютекс
+  `GhostClick.SingleInstance` из `Program.cs`), чтобы файлы не менялись под работающим
+  кликером;
 * при удалении стирает кэш интерфейса (`%LocalAppData%\GhostClick`), а про профили
-  (`%AppData%\GhostClick`) спрашивает — по умолчанию оставляет.
+  (`%AppData%\GhostClick`) спрашивает — по умолчанию оставляет. При тихом удалении
+  (`/SILENT`, так удаляют winget и другие утилиты) не спрашивает и оставляет.
 
-Интерфейс мастера русский (английский — если Windows не русская), картинки слева и в шапке —
+Интерфейс мастера русский, как и у самой программы; английский — только на Windows на
+английском. Картинки слева и в шапке —
 `installer/art/*.bmp` в пяти масштабах экрана, нарисованы из `assets/InstallerWizard.svg`
 и иконки:
 
@@ -317,16 +321,19 @@ git tag v1.0.0 && git push origin v1.0.0
 ```
 
 CI соберёт и проверит установщик и создаст на GitHub релиз `GhostClick 1.0.0` с
-`GhostClick-Setup-1.0.0.exe` — ссылку на него и можно раздавать. Тег, не совпадающий с
-`<Version>`, сборка отклонит. Все остальные сборки получают версию вида `1.0.0-dev.<номер
-запуска>`.
+`GhostClick-Setup-1.0.0.exe` — ссылку на него и можно раздавать. Можно и наоборот: создать
+релиз с новым тегом на странице Releases — CI так же соберёт установщик и приложит его
+к этому релизу, не трогая его текст. Тег, не совпадающий с `<Version>`, сборка отклонит.
+Все остальные сборки получают версию вида `1.0.0-dev.<номер запуска>`.
 
-**Собрать вручную** на Windows с .NET 8 SDK и [Inno Setup 6.3](https://jrsoftware.org/isdl.php):
+**Собрать вручную** на Windows с .NET 8 SDK и [Inno Setup 6.3](https://jrsoftware.org/isdl.php)
+(команды для cmd; в PowerShell перед путём к `ISCC.exe` нужен `&`, а сам путь — тот, куда
+установлен Inno Setup):
 
 ```
 dotnet publish src/GhostClick.App -c Release -r win-x64 --self-contained true -p:DebugType=none -p:PublishDocumentationFiles=false -o publish/app
-curl -L -o installer/MicrosoftEdgeWebview2Setup.exe https://go.microsoft.com/fwlink/p/?LinkId=2124703
-ISCC installer/GhostClick.iss /DAppVersion=1.0.0
+curl.exe -L -o installer\MicrosoftEdgeWebview2Setup.exe "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\GhostClick.iss /DAppVersion=1.0.0
 ```
 
 Готовый установщик появится в `publish/installer`.

@@ -172,6 +172,8 @@ jobs:
       # the uninstaller takes everything away again but the user's profiles.
       - name: Install, run and uninstall
         shell: pwsh
+        # A message box in a silent uninstall would hang here rather than fail.
+        timeout-minutes: 10
         run: |
           $runtimeKey = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
           $runtime = try { (Get-ItemProperty $runtimeKey -ErrorAction Stop).pv } catch { 'not found' }
@@ -249,24 +251,27 @@ jobs:
             if ($green -gt 20 -and $blue -gt 20) { $rendered = $true; break }
           }
 
-          if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
-          if (-not $rendered) { throw 'The interface did not appear within 90 seconds; see the smoke-test-screenshot artifact.' }
+          if (-not $rendered) {
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+            throw 'The interface did not appear within 90 seconds; see the smoke-test-screenshot artifact.'
+          }
           Write-Host 'The installed app rendered its interface.'
 
-          # The page's browser processes outlive the app by a moment and hold its cache folder.
-          $deadline = (Get-Date).AddSeconds(30)
-          while ((Get-Date) -lt $deadline -and
-                 (Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" | Where-Object CommandLine -like '*GhostClick*')) {
-            Start-Sleep -Seconds 1
-          }
+          # Closed the way a user closes it, and uninstalled straight away: the page's browser
+          # processes may still hold the cache folder, which the uninstaller has to cope with.
+          $app.CloseMainWindow() | Out-Null
+          if (-not $app.WaitForExit(15000)) { throw 'GhostClick did not close when its window was closed' }
 
           # --- Uninstall ---
           # A stand-in for the user's profiles: a silent uninstall must keep them.
           New-Item -ItemType Directory -Force $profiles | Out-Null
           Set-Content (Join-Path $profiles 'uninstall-keeps-this.txt') 'profiles stay'
 
+          # The command Windows tools and winget run: /SILENT, message boxes not suppressed.
           # The uninstaller hands over to a copy of itself and returns at once; wait for it.
-          Start-Process (Join-Path $installDir 'unins000.exe') -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'
+          if ($entry.QuietUninstallString -notmatch '^"([^"]+)"\s*(.*)$') { throw "Unexpected QuietUninstallString: $($entry.QuietUninstallString)" }
+          Write-Host "Uninstalling with: $($entry.QuietUninstallString)"
+          Start-Process $Matches[1] -Wait -ArgumentList $Matches[2]
           $deadline = (Get-Date).AddSeconds(90)
           while ((Get-Date) -lt $deadline -and ((Test-Path $installDir) -or (Test-Path $uninstallKey))) {
             Start-Sleep -Seconds 1
@@ -323,12 +328,19 @@ jobs:
           ## Установка
 
           1. Скачайте **GhostClick-Setup-${version}.exe** ниже, в разделе Assets.
-          2. Запустите его. Если Windows покажет «Система Windows защитила ваш компьютер», нажмите **Подробнее → Выполнить в любом случае**: установщик не подписан платным сертификатом, поэтому Windows его пока не знает.
-          3. Нажмите «Далее» и «Установить». Права администратора не нужны.
+          2. Запустите его. Если Windows покажет «Система Windows защитила ваш компьютер», нажмите **Подробнее → Выполнить в любом случае**: установщик не подписан платным сертификатом, поэтому Windows его пока не знает. Браузер тоже может предупредить, что такой файл скачивают редко, — тогда выберите в меню загрузки «Сохранить».
+          3. Нажимайте «Далее», а в конце «Установить». Права администратора не нужны.
 
           GhostClick появится в меню «Пуск» и на рабочем столе. Нужна 64-битная Windows 10 или 11; если на компьютере нет компонента Microsoft Edge WebView2, установщик поставит его сам.
 
           Новая версия ставится поверх старой, профили сохраняются. Удалить программу можно через **Параметры → Приложения**.
           EOF
-          gh release create "$GITHUB_REF_NAME" release/GhostClick-Setup-*.exe \
-            --repo "$GITHUB_REPOSITORY" --title "GhostClick ${version}" --notes-file notes.md
+          # A release made by hand on the Releases page for this tag (which is what pushed the
+          # tag) only gets the setup attached; its own title and text stay. --verify-tag stops
+          # gh from re-creating a tag deleted meanwhile at the head of the default branch.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/GhostClick-Setup-*.exe --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/GhostClick-Setup-*.exe --verify-tag \
+              --repo "$GITHUB_REPOSITORY" --title "GhostClick ${version}" --notes-file notes.md
+          fi
