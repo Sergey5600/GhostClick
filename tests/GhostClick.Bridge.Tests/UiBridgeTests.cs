@@ -104,9 +104,10 @@ public class UiBridgeTests
         Assert.Equal(0, f.Host.Engine.Profile.Safety.MaxRunDurationSeconds);
         Assert.False(f.Last("init").GetProperty("profile").GetProperty("dirty").GetBoolean());
 
-        // The file catches up on the next save.
+        // Saving writes the profile as it is; the engine keeps running it without a limit.
         f.Send(new { type = "saveProfile" });
-        Assert.Equal(0, store.Load("Default").Safety.MaxRunDurationSeconds);
+        Assert.Equal(600, store.Load("Default").Safety.MaxRunDurationSeconds);
+        Assert.Equal(0, f.Host.Engine.Profile.Safety.MaxRunDurationSeconds);
     }
 
     [Fact]
@@ -129,23 +130,56 @@ public class UiBridgeTests
     }
 
     [Fact]
-    public void ChoosingInfiniteLiftsTheTimeLimitAndFixedKeepsIt()
+    public void ChoosingInfiniteLiftsTheTimeLimitAndGoingBackRestoresIt()
     {
         var store = new InMemoryProfileStore();
         var timed = ClickerProfile.CreateDefault("Default");
         timed.Repeat.Mode = RepeatMode.FixedCount;
-        timed.Safety.MaxRunDurationSeconds = 600;
+        timed.Safety.MaxRunDurationSeconds = 90;
         store.Save(timed);
         store.LastUsedProfileName = "Default";
 
         using var f = new Fixture(store);
         f.Ready();
-        Assert.Equal(600, f.Host.Engine.Profile.Safety.MaxRunDurationSeconds);
+        Assert.Equal(90, f.Host.Engine.Profile.Safety.MaxRunDurationSeconds);
 
         f.SetProfile(data => data["repeat"] = "inf");
 
         Assert.Equal(0, f.Host.Engine.Profile.Safety.MaxRunDurationSeconds);
         Assert.True(f.Last("dirty").GetProperty("value").GetBoolean());
+
+        // «N раз» again: the profile is exactly what was saved, limit included.
+        f.SetProfile(data => data["repeat"] = "fixed");
+
+        Assert.Equal(90, f.Host.Engine.Profile.Safety.MaxRunDurationSeconds);
+        Assert.False(f.Last("dirty").GetProperty("value").GetBoolean());
+
+        f.Send(new { type = "saveProfile" });
+        Assert.Equal(90, store.Load("Default").Safety.MaxRunDurationSeconds);
+    }
+
+    [Fact]
+    public void ATimeLimitStopIsReportedWithTheLimitOfThatRun()
+    {
+        var store = new InMemoryProfileStore();
+        var timed = ClickerProfile.CreateDefault("Default");
+        timed.Repeat.Mode = RepeatMode.FixedCount;
+        timed.Repeat.Count = 1_000_000;
+        timed.Interval.DelayMs = 5;
+        timed.Safety.MaxRunDurationSeconds = 1;
+        store.Save(timed);
+        store.LastUsedProfileName = "Default";
+
+        using var f = new Fixture(store);
+        f.Ready();
+        f.Send(new { type = "start" });
+        f.PumpUntil(() => f.Host.Engine.State == EngineState.Running);
+
+        // Switching to «Бесконечно» mid-run affects the next run, not this one.
+        f.SetProfile(data => data["repeat"] = "inf");
+        f.PumpUntil(() => f.Logs().Any(l => l.StartsWith("Лимит времени", StringComparison.Ordinal)));
+
+        Assert.Contains(f.Logs(), l => l.StartsWith("Лимит времени 1 с · ", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -56,6 +56,7 @@ public sealed class UiBridge : IDisposable
     private readonly List<object> _pendingLogs = new();
 
     private string _savedJson = string.Empty;
+    private int _runTimeLimitSeconds;
     private bool _started;
     private bool _ready;
     private bool _listening;
@@ -100,8 +101,7 @@ public sealed class UiBridge : IDisposable
             Log("Горячие клавиши недоступны: " + ex.Message);
         }
 
-        // As in AfterProfileSwap: «Бесконечно» means no run time limit.
-        ProfileMapper.ApplyInfiniteRepeat(Current);
+        ApplyToEngine();
         _savedJson = ProfileSerializer.Serialize(Current);
         Log($"Профиль «{Current.Name}» загружен");
     }
@@ -311,9 +311,14 @@ public sealed class UiBridge : IDisposable
         }
     }
 
+    /// <summary>
+    /// Hands the engine its copy of the current profile (see
+    /// <see cref="ProfileMapper.ToEngineProfile"/>). The profile being edited, saved and
+    /// compared for unsaved changes stays <see cref="Current"/>.
+    /// </summary>
     private void ApplyToEngine()
     {
-        _host.ApplyProfile(Current);
+        _host.ApplyProfile(ProfileMapper.ToEngineProfile(Current));
 
         // ApplyProfile republishes every hotkey; keep them quiet while the page is listening.
         if (_listening)
@@ -411,7 +416,7 @@ public sealed class UiBridge : IDisposable
 
         try
         {
-            _host.ApplyProfile(_host.Profiles.CreateNew(name));
+            _host.Profiles.CreateNew(name);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -441,7 +446,7 @@ public sealed class UiBridge : IDisposable
         try
         {
             _host.Recorder.ApplyTo(Current);
-            _host.ApplyProfile(_host.Profiles.SaveAs(name));
+            _host.Profiles.SaveAs(name);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -455,18 +460,8 @@ public sealed class UiBridge : IDisposable
 
     private void AfterProfileSwap()
     {
-        // Profiles saved before the interface existed carry the engine's ten-minute limit
-        // under «Бесконечно». Lift it here, before taking the saved snapshot: the profile runs
-        // as the interface shows it without looking edited, and the file catches up on the
-        // next save. The engine holds this same object, so the next run already sees it.
-        ProfileMapper.ApplyInfiniteRepeat(Current);
+        ApplyToEngine();
         _savedJson = ProfileSerializer.Serialize(Current);
-
-        if (_listening)
-        {
-            SuspendHotkeys();
-        }
-
         SendProfile();
         SendState();
     }
@@ -537,9 +532,11 @@ public sealed class UiBridge : IDisposable
 
         var actions = string.Join(" + ", e.Profile.Action.Inputs.Select(i => KeyCodes.Describe(i.Key, i.Modifiers)));
         bool dryRun = _injector.DryRun;
+        int timeLimit = e.Profile.Safety.MaxRunDurationSeconds;
 
         _channel.Post(() =>
         {
+            _runTimeLimitSeconds = timeLimit;
             _runTime.Restart();
             Log($"Старт · {(actions.Length > 0 ? actions : "нет действий")}{(dryRun ? " · dry run" : string.Empty)}");
             SendState();
@@ -664,7 +661,8 @@ public sealed class UiBridge : IDisposable
         StopReason.Completed => "Выполнено",
         StopReason.HoldReleased => "Клавиша отпущена",
         StopReason.Failsafe => "Аварийная остановка",
-        StopReason.TimeLimit => $"Лимит времени {FormatDuration(Current.Safety.MaxRunDurationSeconds)}",
+        // The limit of the run that stopped, not of the profile as it is now edited.
+        StopReason.TimeLimit => $"Лимит времени {FormatDuration(_runTimeLimitSeconds)}",
         StopReason.ActionLimit => "Лимит действий",
         StopReason.UserCursorMoved => "Остановлено: мышь сдвинута",
         StopReason.Error => "Ошибка: " + (e.Error?.Message ?? "неизвестно"),

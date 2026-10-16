@@ -250,24 +250,27 @@ public static class ProfileMapper
             profile.Safety.StopOnUserCursorMove = flags.StopOnMouseMove;
             profile.Safety.ActiveWindowOnly = flags.ActiveWindowOnly;
         }
-
-        ApplyInfiniteRepeat(profile);
     }
 
     /// <summary>
-    /// «Повтор: Бесконечно» promises a run that only the user ends. The engine's run time
-    /// limit (<see cref="SafetySettings.MaxRunDurationSeconds"/>, ten minutes by default) is a
-    /// safety net the interface never shows, and it would quietly end such a run, so an
-    /// infinite repeat lifts it. A fixed count keeps whatever limit the profile has.
+    /// The copy of <paramref name="profile"/> the engine runs. «Повтор: Бесконечно» promises
+    /// a run that only the user ends, but the engine's run time limit
+    /// (<see cref="SafetySettings.MaxRunDurationSeconds"/>, ten minutes by default) is a safety
+    /// net the interface never shows and would quietly end it - so the engine's copy drops the
+    /// limit under an infinite repeat. The profile itself keeps its limit: switching to
+    /// «Бесконечно» and back to «N раз» must leave it exactly as it was.
     /// </summary>
-    public static void ApplyInfiniteRepeat(ClickerProfile profile)
+    public static ClickerProfile ToEngineProfile(ClickerProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
 
-        if (profile.Repeat.Mode == RepeatMode.Infinite)
+        var run = profile.Clone();
+        if (run.Repeat.Mode == RepeatMode.Infinite)
         {
-            profile.Safety.MaxRunDurationSeconds = 0;
+            run.Safety.MaxRunDurationSeconds = 0;
         }
+
+        return run;
     }
 
     private static ChordDto? ToDto(HotkeyBinding binding) =>

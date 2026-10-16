@@ -200,28 +200,53 @@ public class MappingTests
     }
 
     [Fact]
-    public void Apply_InfiniteRepeatLiftsTheRunTimeLimit()
+    public void EngineProfile_DropsTheTimeLimitUnderAnInfiniteRepeat()
     {
         var profile = ClickerProfile.CreateDefault();
-        profile.Repeat.Mode = RepeatMode.FixedCount;
         profile.Safety.MaxRunDurationSeconds = 600;
 
-        var dto = ProfileMapper.ToDto(profile);
-        dto.Repeat = "inf";
-        ProfileMapper.Apply(dto, profile);
+        var run = ProfileMapper.ToEngineProfile(profile);
 
-        Assert.Equal(RepeatMode.Infinite, profile.Repeat.Mode);
-        Assert.Equal(0, profile.Safety.MaxRunDurationSeconds);
+        Assert.Equal(RepeatMode.Infinite, run.Repeat.Mode);
+        Assert.Equal(0, run.Safety.MaxRunDurationSeconds);
+
+        // A copy: the profile that is edited and saved keeps its limit.
+        Assert.NotSame(profile, run);
+        Assert.Equal(600, profile.Safety.MaxRunDurationSeconds);
     }
 
     [Fact]
-    public void Apply_FixedRepeatKeepsTheRunTimeLimit()
+    public void EngineProfile_KeepsTheTimeLimitForAFixedCount()
     {
         var profile = ClickerProfile.CreateDefault();
         profile.Repeat.Mode = RepeatMode.FixedCount;
         profile.Safety.MaxRunDurationSeconds = 90;
 
-        ProfileMapper.Apply(ProfileMapper.ToDto(profile), profile);
+        Assert.Equal(90, ProfileMapper.ToEngineProfile(profile).Safety.MaxRunDurationSeconds);
+    }
+
+    [Fact]
+    public void EngineProfile_IsOtherwiseTheSameProfile()
+    {
+        var profile = UiDefaults.CreateProfile("Farm");
+        profile.Action.Inputs = [InputChord.Mouse(MouseButton.Right), new InputChord(VirtualKey.E)];
+        profile.Target.Route = [new ClickPoint(1, 2)];
+
+        Assert.Equal(ProfileSerializer.Serialize(profile), ProfileSerializer.Serialize(ProfileMapper.ToEngineProfile(profile)));
+    }
+
+    [Fact]
+    public void Apply_NeverTouchesTheTimeLimit()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Safety.MaxRunDurationSeconds = 90;
+
+        var dto = ProfileMapper.ToDto(profile);
+        dto.Repeat = "inf";
+        ProfileMapper.Apply(dto, profile);
+        dto.Repeat = "fixed";
+        ProfileMapper.Apply(dto, profile);
 
         Assert.Equal(90, profile.Safety.MaxRunDurationSeconds);
     }
