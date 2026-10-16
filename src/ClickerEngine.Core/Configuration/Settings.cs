@@ -32,10 +32,10 @@ public sealed class ActionSettings
     public bool RandomizeHoldDuration { get; set; }
 
     /// <summary>Shortest randomized hold, in milliseconds.</summary>
-    public int MinHoldDurationMs { get; set; } = 30;
+    public int MinHoldDurationMs { get; set; } = 20;
 
     /// <summary>Longest randomized hold, in milliseconds.</summary>
-    public int MaxHoldDurationMs { get; set; } = 90;
+    public int MaxHoldDurationMs { get; set; } = 50;
 
     /// <summary>True when at least one input is a mouse button.</summary>
     [JsonIgnore]

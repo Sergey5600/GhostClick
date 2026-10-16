@@ -31,6 +31,13 @@ public sealed class HotkeyController : IDisposable
     /// <summary>Raised when the record hotkey captures a point.</summary>
     public event EventHandler<PointRecordedEventArgs>? PointRecorded;
 
+    /// <summary>
+    /// Raised when the start hotkey could not start a run because the profile does not
+    /// validate. Without it the press would just do nothing: hotkey handlers run on a
+    /// background thread where nobody would see the exception.
+    /// </summary>
+    public event EventHandler<ProfileValidationException>? StartRejected;
+
     /// <summary>Pushes the engine profile's hotkeys into the service and starts listening.</summary>
     public void Start()
     {
@@ -95,7 +102,7 @@ public sealed class HotkeyController : IDisposable
         {
             if (isPressed)
             {
-                _engine.Start();
+                TryStart();
             }
             else
             {
@@ -106,9 +113,30 @@ public sealed class HotkeyController : IDisposable
         }
 
         // Toggle mode acts on the press and ignores the release.
-        if (isPressed)
+        if (!isPressed)
         {
-            _engine.Toggle();
+            return;
+        }
+
+        if (_engine.IsActive)
+        {
+            _engine.Stop();
+        }
+        else
+        {
+            TryStart();
+        }
+    }
+
+    private void TryStart()
+    {
+        try
+        {
+            _engine.Start();
+        }
+        catch (ProfileValidationException ex)
+        {
+            StartRejected?.Invoke(this, ex);
         }
     }
 }
