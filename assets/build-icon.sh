@@ -2,8 +2,8 @@
 # Regenerates the Windows application icon from assets/AppIcon.svg.
 #
 # Each size is rendered straight from the vector rather than downscaled from one large
-# bitmap: librsvg evaluates the shadow and the rim at the target resolution, and the result
-# is visibly crisper at 16 and 32 px, where the icon spends most of its life.
+# bitmap: librsvg evaluates the drop shadow at the target resolution, and the result is
+# visibly crisper at 16 and 32 px, where the icon spends most of its life.
 #
 # The plate's straight edges are also put on whole pixels at every size. AppIcon.svg leaves
 # 24 of its 1072 units around the plate for the shadow (about 1 px at 48 px); scaled as is,
