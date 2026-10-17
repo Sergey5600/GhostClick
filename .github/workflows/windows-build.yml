@@ -364,6 +364,11 @@ jobs:
       contents: write
 
     steps:
+      # Only for docs/release-notes; first, because checking out empties the workspace.
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: docs/release-notes
+
       - uses: actions/download-artifact@v7
         with:
           pattern: GhostClick-Setup-*
@@ -375,7 +380,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          cat > notes.md <<EOF
+          cat > install.md <<EOF
           ## Installation
 
           1. Download **GhostClick-Setup-${version}.exe** below, under Assets. If your browser warns that the file "isn't commonly downloaded", choose "Keep" in the download menu (and confirm once more if it asks again).
@@ -402,6 +407,12 @@ jobs:
 
           Интерфейс GhostClick на русском и английском: язык переключается кнопками **RU / EN** вверху окна.
           EOF
+          # What is new in this version, written in docs/release-notes/<version>.md, goes first.
+          if [ -f "docs/release-notes/${version}.md" ]; then
+            { cat "docs/release-notes/${version}.md"; printf '\n---\n\n'; cat install.md; } > notes.md
+          else
+            cp install.md notes.md
+          fi
           # A release made by hand on the Releases page for this tag (which is what pushed the
           # tag) gets the setup attached; if it was published with no text, it also gets the
           # title and notes above, otherwise its own stay. --verify-tag stops gh from
