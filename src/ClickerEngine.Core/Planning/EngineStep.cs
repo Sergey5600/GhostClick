@@ -25,7 +25,8 @@ public enum EngineStepKind
 }
 
 /// <summary>
-/// A single instruction produced by <see cref="ActionPlanner"/> and executed by the engine.
+/// A single instruction produced by a planner (<see cref="ActionPlanner"/>,
+/// <see cref="ScriptPlanner"/>) and executed by the engine.
 /// <para>
 /// Keeping the plan as a stream of these primitives is what makes the whole engine testable:
 /// a test can enumerate a plan and assert on the exact sequence of moves, presses and waits
@@ -65,6 +66,20 @@ public readonly record struct EngineStep
     /// </summary>
     public bool CompletesAction { get; private init; }
 
+    /// <summary>
+    /// The script block this step executes, so the engine can report which block is running.
+    /// Null for clicker plans, and for the automatic pause between script steps (the block
+    /// before it stays the current one).
+    /// </summary>
+    public ScriptLocation? Location { get; private init; }
+
+    /// <summary>
+    /// On a script's presses: whether the block presses a mouse button or a key, which is what
+    /// the window gate judges the action by (the window under the cursor, or the foreground
+    /// one). Null on a clicker's steps, whose whole action list decides.
+    /// </summary>
+    public ActionKind? Device { get; private init; }
+
     public static EngineStep Wait(TimeSpan delay) =>
         new(EngineStepKind.Wait) { Delay = delay };
 
@@ -90,6 +105,12 @@ public readonly record struct EngineStep
             IsModifier = isModifier,
             CompletesAction = completesAction && !isModifier,
         };
+
+    /// <summary>The same step, attributed to a script block.</summary>
+    public EngineStep WithLocation(ScriptLocation? location) => this with { Location = location };
+
+    /// <summary>The same step, marked as part of a mouse or a keyboard action.</summary>
+    public EngineStep WithDevice(ActionKind device) => this with { Device = device };
 
     public override string ToString() => Kind switch
     {

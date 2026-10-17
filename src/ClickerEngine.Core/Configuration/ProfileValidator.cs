@@ -1,10 +1,20 @@
 namespace ClickerEngine.Core.Configuration;
 
 /// <summary>Reports a single problem found in a profile.</summary>
-/// <param name="Path">Dotted property path, e.g. <c>Interval.MinDelayMs</c>.</param>
+/// <param name="Path">
+/// Dotted property path, e.g. <c>Interval.MinDelayMs</c>, or for a script block
+/// <c>Script.Blocks[2].Blocks[0].Count</c>.
+/// </param>
 /// <param name="Message">Human readable description.</param>
 public readonly record struct ValidationError(string Path, string Message)
 {
+    /// <summary>
+    /// The id of the script block the problem is in, so an interface can mark that block; null
+    /// for problems outside the blocks. The index path in <see cref="Path"/> tells apart two
+    /// blocks that share an id.
+    /// </summary>
+    public string? BlockId { get; init; }
+
     public override string ToString() => $"{Path}: {Message}";
 }
 
@@ -27,13 +37,29 @@ public static class ProfileValidator
             errors.Add(new ValidationError(nameof(profile.Name), "Profile name must not be empty."));
         }
 
-        ValidateInterval(profile.Interval, errors);
-        ValidateAction(profile.Action, errors);
-        ValidateRepeat(profile.Repeat, errors);
-        ValidateTarget(profile.Target, errors);
+        // A script does not use the clicker's action list, interval, repeat or target, and a
+        // clicker does not run its script: each is checked only for what it actually runs.
+        if (profile.Kind == ProfileKind.Script)
+        {
+            ScriptValidator.Validate(profile.Script, errors);
+            ValidateAction(profile.Action, errors, clicker: false);
+        }
+        else
+        {
+            ValidateInterval(profile.Interval, errors);
+            ValidateAction(profile.Action, errors, clicker: true);
+            ValidateRepeat(profile.Repeat, errors);
+            ValidateTarget(profile.Target, errors);
+        }
+
         ValidateMovement(profile.Movement, errors);
         ValidateJitter(profile.Jitter, errors);
-        ValidateDirectional(profile, errors);
+
+        if (profile.Kind != ProfileKind.Script)
+        {
+            ValidateDirectional(profile, errors);
+        }
+
         ValidateSafety(profile.Safety, errors);
 
         if (profile.Mode == ClickMode.Hold && !profile.Hotkeys.StartStop.IsBound)
@@ -81,31 +107,20 @@ public static class ProfileValidator
         }
     }
 
-    private static void ValidateAction(ActionSettings action, List<ValidationError> errors)
+    /// <summary>
+    /// The hold time is used by a script's «Нажать» too; the rest of the action only by a
+    /// <paramref name="clicker"/>.
+    /// </summary>
+    private static void ValidateAction(ActionSettings action, List<ValidationError> errors, bool clicker)
     {
         if (action.HoldDurationMs < 0)
         {
             errors.Add(new ValidationError("Action.HoldDurationMs", "Hold duration must not be negative."));
         }
 
-        if (action.DoubleClickGapMs < 0)
+        if (clicker)
         {
-            errors.Add(new ValidationError("Action.DoubleClickGapMs", "Double click gap must not be negative."));
-        }
-
-        if (action.Inputs is null || action.Inputs.Count == 0)
-        {
-            errors.Add(new ValidationError("Action.Inputs", "Choose at least one key or mouse button to press."));
-        }
-        else
-        {
-            for (int i = 0; i < action.Inputs.Count; i++)
-            {
-                if (action.Inputs[i] is null || action.Inputs[i].Key == VirtualKey.None)
-                {
-                    errors.Add(new ValidationError($"Action.Inputs[{i}]", "Every input needs a key or mouse button."));
-                }
-            }
+            ValidateInputs(action, errors);
         }
 
         if (action.RandomizeHoldDuration)
@@ -120,6 +135,28 @@ public static class ProfileValidator
                 errors.Add(new ValidationError(
                     "Action.MaxHoldDurationMs",
                     $"Maximum hold ({action.MaxHoldDurationMs} ms) must be >= minimum hold ({action.MinHoldDurationMs} ms)."));
+            }
+        }
+    }
+
+    private static void ValidateInputs(ActionSettings action, List<ValidationError> errors)
+    {
+        if (action.DoubleClickGapMs < 0)
+        {
+            errors.Add(new ValidationError("Action.DoubleClickGapMs", "Double click gap must not be negative."));
+        }
+
+        if (action.Inputs is null || action.Inputs.Count == 0)
+        {
+            errors.Add(new ValidationError("Action.Inputs", "Choose at least one key or mouse button to press."));
+            return;
+        }
+
+        for (int i = 0; i < action.Inputs.Count; i++)
+        {
+            if (action.Inputs[i] is null || action.Inputs[i].Key == VirtualKey.None)
+            {
+                errors.Add(new ValidationError($"Action.Inputs[{i}]", "Every input needs a key or mouse button."));
             }
         }
     }

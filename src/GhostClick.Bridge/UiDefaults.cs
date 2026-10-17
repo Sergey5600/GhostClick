@@ -19,4 +19,16 @@ public static class UiDefaults
         profile.Safety.MaxRunDurationSeconds = 0;
         return profile;
     }
+
+    /// <summary>
+    /// A new script: the same starting point, with one «Нажать» (left button, at the cursor)
+    /// to build on - a script without blocks could not be saved.
+    /// </summary>
+    public static ClickerProfile CreateScript(string name)
+    {
+        var profile = CreateProfile(name);
+        profile.Kind = ProfileKind.Script;
+        profile.Script.Blocks.Add(new PressBlock());
+        return profile;
+    }
 }
