@@ -350,10 +350,15 @@ jobs:
           Новая версия ставится поверх старой, профили сохраняются. Удалить программу можно через **Параметры → Приложения**.
           EOF
           # A release made by hand on the Releases page for this tag (which is what pushed the
-          # tag) only gets the setup attached; its own title and text stay. --verify-tag stops
-          # gh from re-creating a tag deleted meanwhile at the head of the default branch.
+          # tag) gets the setup attached; if it was published with no text, it also gets the
+          # title and notes above, otherwise its own stay. --verify-tag stops gh from
+          # re-creating a tag deleted meanwhile at the head of the default branch.
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" release/GhostClick-Setup-*.exe --repo "$GITHUB_REPOSITORY" --clobber
+            body=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+            if [ -z "$body" ]; then
+              gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "GhostClick ${version}" --notes-file notes.md
+            fi
           else
             gh release create "$GITHUB_REF_NAME" release/GhostClick-Setup-*.exe --verify-tag \
               --repo "$GITHUB_REPOSITORY" --title "GhostClick ${version}" --notes-file notes.md
