@@ -33,7 +33,7 @@ public class ScriptMappingTests
         Assert.Equal(75, script["stepDelay"]!.GetValue<int>());
 
         Assert.Equal(
-            """{"type":"press","id":"p","enabled":true,"label":"Клик","input":{"mods":["Ctrl","Shift"],"key":"KeyE"},"at":{"x":10,"y":20}}""",
+            """{"type":"press","id":"p","enabled":true,"label":"Клик","input":{"mods":["Ctrl","Shift"],"key":"KeyE"},"press":30,"at":{"x":10,"y":20}}""",
             Compact(blocks[0]));
         Assert.Equal(
             """{"type":"hold","id":"h","enabled":true,"label":null,"input":{"mods":[],"key":"Mouse4"}}""",
@@ -248,7 +248,7 @@ public class ScriptMappingTests
         Assert.Equal("«Закинуть»: Выберите клавишу или кнопку мыши", ScriptTexts.Describe(errors[1], profile.Script));
         Assert.Equal(
             "«Повторить»: Количество повторов должно быть не меньше 1",
-            UiBridge.Describe(new ProfileValidationException(errors), profile.Script));
+            UiBridge.Describe(new ProfileValidationException(errors), UiText.Russian, profile.Script));
     }
 
     [Fact]

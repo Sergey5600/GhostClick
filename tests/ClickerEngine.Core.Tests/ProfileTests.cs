@@ -12,12 +12,16 @@ public class ProfileTests
     {
         var profile = ClickerProfile.CreateDefault("Round trip");
         profile.Mode = ClickMode.Hold;
-        profile.Action.Inputs = [new InputChord(VirtualKey.F4, KeyModifiers.Alt | KeyModifiers.Shift), InputChord.Mouse(MouseButton.XButton1)];
+        profile.Action.Inputs =
+        [
+            new InputChord(VirtualKey.F4, KeyModifiers.Alt | KeyModifiers.Shift) { PressMs = 42 },
+            InputChord.Mouse(MouseButton.XButton1),
+            new InputChord(VirtualKey.W) { Mode = PressMode.Hold },
+            new InputChord(VirtualKey.A) { Mode = PressMode.Hold, Hold = HoldMode.Timed, HoldMs = 1200 },
+        ];
         profile.Action.ClickType = ClickType.Double;
-        profile.Action.HoldDurationMs = 42;
         profile.Action.RandomizeHoldDuration = true;
-        profile.Action.MinHoldDurationMs = 12;
-        profile.Action.MaxHoldDurationMs = 34;
+        profile.Action.PressSpreadPercent = 12;
         profile.Interval.RandomizeEnabled = true;
         profile.Interval.MinDelayMs = 15;
         profile.Interval.MaxDelayMs = 95;
@@ -44,11 +48,14 @@ public class ProfileTests
         Assert.Equal(profile.Name, restored.Name);
         Assert.Equal(ClickMode.Hold, restored.Mode);
         Assert.Equal(profile.Action.Inputs, restored.Action.Inputs);
+        Assert.Equal(42, restored.Action.Inputs[0].PressMs);
+        Assert.Equal(PressMode.Hold, restored.Action.Inputs[2].Mode);
+        Assert.Equal(HoldMode.WhileRunning, restored.Action.Inputs[2].Hold);
+        Assert.Equal(HoldMode.Timed, restored.Action.Inputs[3].Hold);
+        Assert.Equal(1200, restored.Action.Inputs[3].HoldMs);
         Assert.Equal(ClickType.Double, restored.Action.ClickType);
-        Assert.Equal(42, restored.Action.HoldDurationMs);
         Assert.True(restored.Action.RandomizeHoldDuration);
-        Assert.Equal(12, restored.Action.MinHoldDurationMs);
-        Assert.Equal(34, restored.Action.MaxHoldDurationMs);
+        Assert.Equal(12, restored.Action.PressSpreadPercent);
         Assert.True(restored.Interval.RandomizeEnabled);
         Assert.Equal(15, restored.Interval.MinDelayMs);
         Assert.Equal(95, restored.Interval.MaxDelayMs);
@@ -164,6 +171,71 @@ public class ProfileTests
         Assert.False(action.ContainsKey("kind"));
         Assert.False(action.ContainsKey("button"));
         Assert.Equal("clicker", JsonNode.Parse(json)!["kind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Serialization_WritesHowEachInputIsPressedByName()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Action.Inputs = [new InputChord(VirtualKey.W) { Mode = PressMode.Hold, Hold = HoldMode.Timed }];
+
+        var json = ProfileSerializer.Serialize(profile);
+
+        Assert.Contains("\"mode\": \"hold\"", json);
+        Assert.Contains("\"hold\": \"timed\"", json);
+        Assert.Contains("\"pressMs\": 30", json);
+        Assert.Contains("\"holdMs\": 500", json);
+        Assert.DoesNotContain("holdDurationMs", json);
+        Assert.DoesNotContain("isHeldWhileRunning", json);
+        Assert.DoesNotContain("heldWhileRunning", json);
+    }
+
+    [Fact]
+    public void Deserialization_GivesSchemaTwoInputsTheDefaultPress()
+    {
+        const string json = """
+            {
+              "version": 2,
+              "action": { "inputs": [ { "key": "leftButton", "modifiers": "none" } ], "holdDurationMs": 0, "randomizeHoldDuration": true, "minHoldDurationMs": 20, "maxHoldDurationMs": 50 }
+            }
+            """;
+
+        var profile = ProfileSerializer.Deserialize(json);
+
+        Assert.Equal(ClickerProfile.CurrentVersion, profile.Version);
+        var input = Assert.Single(profile.Action.Inputs);
+        Assert.Equal(PressMode.Click, input.Mode);
+        Assert.Equal(InputChord.DefaultPressMs, input.PressMs);
+        Assert.Equal(HoldMode.WhileRunning, input.Hold);
+        Assert.Equal(InputChord.DefaultHoldMs, input.HoldMs);
+        Assert.True(profile.Action.RandomizeHoldDuration);
+        Assert.DoesNotContain("holdDurationMs", ProfileSerializer.Serialize(profile));
+    }
+
+    [Fact]
+    public void Deserialization_MovesASchemaTwoPressLengthOntoEveryInput()
+    {
+        const string json = """
+            {
+              "version": 2,
+              "action": { "inputs": [ { "key": "leftButton" }, { "key": "e", "modifiers": "control" } ], "holdDurationMs": 120 }
+            }
+            """;
+
+        var profile = ProfileSerializer.Deserialize(json);
+
+        Assert.All(profile.Action.Inputs, i => Assert.Equal(120, i.PressMs));
+        Assert.Equal(KeyModifiers.Control, profile.Action.Inputs[1].Modifiers);
+    }
+
+    [Fact]
+    public void Deserialization_GivesASchemaOneActionItsPressLength()
+    {
+        var profile = ProfileSerializer.Deserialize("""{ "version": 1, "action": { "kind": "mouse", "button": "right", "holdDurationMs": 45 } }""");
+
+        var input = Assert.Single(profile.Action.Inputs);
+        Assert.Equal(VirtualKey.RightButton, input.Key);
+        Assert.Equal(45, input.PressMs);
     }
 
     [Fact]

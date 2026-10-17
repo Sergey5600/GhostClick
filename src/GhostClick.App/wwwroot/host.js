@@ -22,6 +22,8 @@
   }
 
   const clone = value => JSON.parse(JSON.stringify(value));
+  const action = (key, more) => ({ mods: [], key, mode: 'click', press: 30, hold: 'run', holdMs: 500, ...more });
+  const LANG_KEY = 'gc_lang';
 
   // JSON with every object's keys sorted: compares profiles whatever order their fields came in.
   const canonical = value => JSON.stringify(value, (_, v) => (v && typeof v === 'object' && !Array.isArray(v)
@@ -41,7 +43,7 @@
         panic: { mods: ['Ctrl'], key: 'F12' },
         point: { mods: [], key: 'F9' },
       },
-      actions: [{ mods: [], key: 'Mouse1' }],
+      actions: [action('Mouse1')],
       points: [],
       mode: 'toggle', target: 'cursor', click: 'single', move: 'instant',
       repeat: 'inf', count: 100, delay: 100, rand: false, minDelay: 80, maxDelay: 140,
@@ -180,7 +182,7 @@
   // The plan of a run, one step at a time, like GhostClick.Core's ScriptPlanner: blocks top to
   // bottom, the automatic pause between steps unless a «Ждать» stands in for it, repeats,
   // passes, «Стоп». A step is { block: where it is | null for the pause, ms, action }.
-  function* planScript(script, holdMs) {
+  function* planScript(script) {
     const state = { pauseDue: false, stopped: false, steps: 0 };
     const passes = script.repeat === 'once' ? 1 : script.repeat === 'fixed' ? Math.max(1, script.count) : null;
 
@@ -228,7 +230,7 @@
         yield { block: null, ms: script.stepDelay, action: false };
       }
       state.steps++;
-      yield { block: at, ms: b.type === 'press' ? holdMs : 0, action: b.type === 'press' || b.type === 'release' };
+      yield { block: at, ms: b.type === 'press' ? (b.press ?? 30) : 0, action: b.type === 'press' || b.type === 'release' };
       state.pauseDue = true;
     }
   }
@@ -238,9 +240,9 @@
   function createPreviewHost() {
     const listeners = [];
     const saved = { Default: defaultProfile(), Fishing: defaultProfile(), Farm: defaultProfile() };
-    saved.Fishing.actions = [{ mods: [], key: 'Mouse2' }];
+    saved.Fishing.actions = [action('Mouse2')];
     saved.Fishing.delay = 1200;
-    saved.Farm.actions = [{ mods: [], key: 'Mouse1' }, { mods: [], key: 'KeyE' }];
+    saved.Farm.actions = [action('Mouse1'), action('KeyE'), action('KeyW', { mode: 'hold' })];
     saved.Farm.click = 'double';
     saved['Рыбалка — сценарий'] = fishingScript();
     saved['Ферма — сценарий'] = farmScript();
@@ -255,6 +257,7 @@
     let resumedAt = 0;
     let timer = 0;
     let ticker = 0;
+    let lang = readLang();
     let sentIssues = '';
     // A script run: its plan, the step under way and how much of it is left, the block it is on.
     let plan = null;
@@ -263,6 +266,8 @@
     let pendingAt = 0;
     let runningBlock = null;
 
+    // The host writes its log lines and notices in the interface language, as the real one does.
+    const T = (key, ...args) => window.GC_I18N.t(key, ...args);
     const now = () => new Date().toTimeString().slice(0, 8);
     const emit = message => setTimeout(() => listeners.forEach(l => l(clone(message))), 0);
     const log = message => emit({ type: 'log', time: now(), message });
@@ -298,12 +303,12 @@
     // The checks of the rest of the profile; a script has no action list, interval or route.
     function validateClicker() {
       if (!isScript()) {
-        if (!current.actions.length) return 'Выберите хотя бы одно действие';
-        if (current.target === 'points' && !enabledPoints().length) return 'Добавьте хотя бы одну точку маршрута';
-        if (current.rand && current.maxDelay < current.minDelay) return 'Максимальный интервал меньше минимального';
-        if (current.repeat === 'fixed' && current.count < 1) return 'Количество повторов должно быть не меньше 1';
+        if (!current.actions.length) return T('vNoAction');
+        if (current.target === 'points' && !enabledPoints().length) return T('vNoPoint');
+        if (current.rand && current.maxDelay < current.minDelay) return T('vMaxBelowMin');
+        if (current.repeat === 'fixed' && current.count < 1) return T('vCount');
       }
-      if (current.mode === 'hold' && !current.bind.toggle) return 'В режиме удержания нужна клавиша «Старт / Стоп»';
+      if (current.mode === 'hold' && !current.bind.toggle) return T('vHoldKey');
       return '';
     }
 
@@ -315,12 +320,20 @@
       return b ? `«${(b.label || '').trim() || TITLES[b.type] || 'Неизвестный блок'}»: ${first.message}` : first.message;
     }
 
+    // A tick lasts as long as its longest press: a click's press time, or a timed hold.
+    // Inputs held for the whole run are not part of it.
+    function tickLength() {
+      return current.actions.reduce((longest, a) => {
+        if (a.mode !== 'hold') return Math.max(longest, a.press || 0);
+        return a.hold === 'time' ? Math.max(longest, a.holdMs || 0) : longest;
+      }, 0);
+    }
+
     function nextDelay() {
       const interval = current.rand
         ? current.minDelay + Math.random() * Math.max(0, current.maxDelay - current.minDelay)
         : current.delay;
-      const hold = current.flags.holdRandom ? 35 : 0;
-      return Math.max(10, interval + hold);
+      return Math.max(10, interval + tickLength());
     }
 
     function schedule() {
@@ -329,7 +342,7 @@
       timer = setTimeout(() => {
         if (run !== 'running') return;
         clicks += 1;
-        if (current.repeat === 'fixed' && clicks >= current.count) return stop('Выполнено');
+        if (current.repeat === 'fixed' && clicks >= current.count) return stop(T('done'));
         schedule();
       }, nextDelay());
     }
@@ -346,7 +359,7 @@
       if (run !== 'running') return;
       if (!pending) {
         const next = plan.next();
-        if (next.done) return stop('Выполнено');
+        if (next.done) return stop(T('done'));
         pending = next.value;
         pendingLeft = pending.ms;
         if (pending.block) showBlock(pending.block);
@@ -367,10 +380,10 @@
       const fmt = c => [...c.mods, window.GC_LAYOUT.label(c.key)].join(' + ');
       if (isScript()) {
         const n = (function count(list) { return enabled(list).reduce((all, b) => all + 1 + count(b.blocks), 0); })(current.script.blocks);
-        plan = planScript(clone(current.script), current.flags.holdRandom ? 35 : 0);
-        log(`Старт · сценарий, ${n} ${plural(n, 'блок', 'блока', 'блоков')}${dryRun ? ' · dry run' : ''}`);
+        plan = planScript(clone(current.script));
+        log(`${T('start')} · ${T('scriptSummary', n)}${dryRun ? ' · dry run' : ''}`);
       } else {
-        log(`Старт · ${current.actions.map(fmt).join(' + ')}${dryRun ? ' · dry run' : ''}`);
+        log(`${T('start')} · ${current.actions.map(fmt).join(' + ') || T('noActions')}${dryRun ? ' · dry run' : ''}`);
       }
       emit(state());
       schedule();
@@ -383,34 +396,27 @@
       elapsed = elapsedMs(); run = 'stopped';
       plan = null; pending = null;
       showBlock(null);
-      const n = clicks;
-      log(`${reason} · ${n} ${plural(n, 'клик', 'клика', 'кликов')}`);
+      log(`${reason} · ${T('nClicks', clicks)}`);
       emit(state());
-    }
-
-    function plural(n, one, few, many) {
-      if (n % 10 === 1 && n % 100 !== 11) return one;
-      return [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? few : many;
     }
 
     function pause() {
       if (run !== 'running') return;
       clearTimeout(timer); elapsed = elapsedMs(); run = 'paused';
       if (pending) pendingLeft = Math.max(0, pendingLeft - (Date.now() - pendingAt));
-      log('Пауза'); emit(state());
+      log(T('pause')); emit(state());
     }
 
     function resume() {
       if (run !== 'paused') return;
       run = 'running'; resumedAt = Date.now();
-      log('Продолжено'); emit(state()); schedule();
+      log(T('resumed')); emit(state()); schedule();
     }
 
     function load(next) {
-      stop('Остановлено');
+      stop(T('stopped'));
       name = next; current = clone(saved[next]);
       emit(profileMessage());
-      log(`Профиль «${next}» загружен`);
     }
 
     function unique(make, first) {
@@ -419,15 +425,17 @@
 
     const handlers = {
       ready() {
+        // The page takes its language from here, so the first log line is already in it.
+        window.GC_I18N.setLang(lang);
         emit({
           type: 'init', profiles: profiles(), profile: { name, data: current, dirty: dirty(), issues: issues() },
-          runtime: state(), dryRun, backend: 'Preview', hotkeys: false,
+          runtime: state(), dryRun, backend: 'Preview', hotkeys: false, lang,
         });
-        log(`Профиль «${name}» загружен`);
+        log(T('profLoaded', name));
       },
       start, pause, resume,
-      stop: () => stop('Остановлено'),
-      panic: () => stop('Аварийная остановка'),
+      stop: () => stop(T('stopped')),
+      panic: () => stop(T('s_panic')),
       setProfile(m) {
         // A page that predates scripts sends neither; they stay as they were.
         const data = clone(m.data);
@@ -444,27 +452,33 @@
         if (problem) return toast(problem, true);
         saved[name] = clone(current);
         emit(profileMessage());
-        toast(`Профиль «${name}» сохранён`); log(`Профиль «${name}» сохранён`);
+        toast(T('profSaved', name)); log(T('profSaved', name));
       },
-      revertProfile() { current = clone(saved[name]); emit(profileMessage()); log(`Профиль «${name}» загружен`); },
-      loadProfile(m) { if (m.name !== name && saved[m.name]) load(m.name); },
+      revertProfile() { current = clone(saved[name]); emit(profileMessage()); log(T('profLoaded', name)); },
+      loadProfile(m) { if (m.name !== name && saved[m.name]) { load(m.name); log(T('profLoaded', m.name)); } },
       newProfile(m) {
         const script = m.kind === 'script';
-        const next = unique(i => (script ? `Сценарий ${i}` : `Профиль ${i}`), profiles().length + 1);
+        const next = unique(i => T(script ? 'scriptN' : 'profN', i), profiles().length + 1);
         saved[next] = script ? defaultScript() : defaultProfile();
         load(next);
+        log(T('profCreated', next));
       },
       duplicateProfile() {
         const problem = validate();
         if (problem) return toast(problem, true);
         const source = name;
-        const next = unique(i => (i === 1 ? `${source} (копия)` : `${source} (копия ${i})`), 1);
+        const next = unique(i => T('copyOf', source, i), 1);
         saved[next] = clone(current);
         name = next;
         emit(profileMessage());
-        log(`Профиль «${next}» создан из «${source}»`);
+        log(T('profCopied', next, source));
       },
-      setDryRun(m) { if (run !== 'stopped') stop('Остановлено'); dryRun = !!m.value; },
+      setDryRun(m) { if (run !== 'stopped') stop(T('stopped')); dryRun = !!m.value; },
+      setLanguage(m) {
+        if (!window.GC_I18N.LANGS.includes(m.lang)) return;
+        lang = m.lang;
+        try { localStorage.setItem(LANG_KEY, lang); } catch (e) { /* private mode: forgotten next time */ }
+      },
       listen() {},
     };
 
@@ -474,12 +488,21 @@
       listen(callback) { listeners.push(callback); },
       // There are no global hooks in a browser; the page calls these for the hotkeys it sees.
       previewHotkey(slot, point) {
-        if (slot === 'toggle') return run === 'stopped' ? start() : stop('Остановлено');
+        if (slot === 'toggle') return run === 'stopped' ? start() : stop(T('stopped'));
         if (slot === 'pause') return run === 'running' ? pause() : resume();
-        if (slot === 'panic') return stop('Аварийная остановка');
+        if (slot === 'panic') return stop(T('s_panic'));
         if (slot === 'point') emit({ type: 'pointAdded', x: point.x, y: point.y });
       },
     };
+  }
+
+  function readLang() {
+    try {
+      const saved = localStorage.getItem(LANG_KEY);
+      return window.GC_I18N.LANGS.includes(saved) ? saved : 'ru';
+    } catch (e) {
+      return 'ru';
+    }
   }
 
   window.GC_createHost = createHost;

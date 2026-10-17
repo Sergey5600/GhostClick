@@ -2,40 +2,34 @@ using System.Text.Json.Serialization;
 
 namespace ClickerEngine.Core.Configuration;
 
-/// <summary>What the engine emits on every action tick: which buttons and keys.</summary>
+/// <summary>What the engine emits on every action tick: which buttons and keys, and how.</summary>
 public sealed class ActionSettings
 {
     /// <summary>
-    /// Everything pressed on an action tick. All entries go down together, are held, and come
-    /// up together, so <c>[LeftButton, E]</c> clicks while pressing E. The modifiers of every
-    /// entry are held around the whole action.
+    /// Everything the engine presses. Inputs that click (<see cref="PressMode.Click"/>) and
+    /// timed holds go down together on every action tick and each comes up after its own press
+    /// or hold time, so <c>[LeftButton, E]</c> clicks while pressing E. The modifiers of every
+    /// such entry are held around the whole tick. Inputs held while running
+    /// (<see cref="InputChord.IsHeldWhileRunning"/>) are not part of the ticks: they stay down,
+    /// with their modifiers, for as long as the run goes.
     /// </summary>
     public List<InputChord> Inputs { get; set; } = new() { InputChord.Mouse(MouseButton.Left) };
 
-    /// <summary>Single or double click.</summary>
+    /// <summary>Single or double click. A double click presses the clicking inputs twice per tick; holds once.</summary>
     public ClickType ClickType { get; set; } = ClickType.Single;
 
     /// <summary>Gap between the two clicks of a double click, in milliseconds.</summary>
     public int DoubleClickGapMs { get; set; } = 40;
 
     /// <summary>
-    /// How long the buttons and keys are held down, in milliseconds. Zero sends press and
-    /// release back to back; a small non-zero value (20-60 ms) looks more like a human.
-    /// </summary>
-    public int HoldDurationMs { get; set; }
-
-    /// <summary>
-    /// When true each press is held for a random time drawn from
-    /// [<see cref="MinHoldDurationMs"/>, <see cref="MaxHoldDurationMs"/>] instead of
-    /// <see cref="HoldDurationMs"/>.
+    /// When true each click is held for a random time around the input's own
+    /// <see cref="InputChord.PressMs"/>, up to <see cref="PressSpreadPercent"/> shorter or
+    /// longer, so no two presses last exactly the same.
     /// </summary>
     public bool RandomizeHoldDuration { get; set; }
 
-    /// <summary>Shortest randomized hold, in milliseconds.</summary>
-    public int MinHoldDurationMs { get; set; } = 20;
-
-    /// <summary>Longest randomized hold, in milliseconds.</summary>
-    public int MaxHoldDurationMs { get; set; } = 50;
+    /// <summary>How far a randomized press may stray from its set length, in percent (0-100).</summary>
+    public int PressSpreadPercent { get; set; } = 30;
 
     /// <summary>True when at least one input is a mouse button.</summary>
     [JsonIgnore]
@@ -44,6 +38,11 @@ public sealed class ActionSettings
     /// <summary>True when at least one input is a keyboard key.</summary>
     [JsonIgnore]
     public bool UsesKeyboard => Inputs?.Any(i => i is { IsMouse: false }) == true;
+
+    /// <summary>The inputs held down for the whole run rather than pressed on the ticks.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<InputChord> HeldWhileRunning =>
+        Inputs?.Where(i => i is { IsHeldWhileRunning: true, Key: not VirtualKey.None }).ToArray() ?? Array.Empty<InputChord>();
 
     public ActionSettings Clone()
     {

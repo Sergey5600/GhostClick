@@ -45,17 +45,21 @@ internal static class PlanSteps
         ? EngineStep.MouseUp(button, completesAction)
         : EngineStep.KeyUp(key, completesAction: completesAction);
 
-    /// <summary>How long the next press is held: fixed, or drawn from the configured range.</summary>
-    public static int HoldDuration(ActionSettings action, IRandomSource random)
+    /// <summary>
+    /// How long the next press of <paramref name="input"/> is held: its own press time, or -
+    /// with <see cref="ActionSettings.RandomizeHoldDuration"/> - a random time up to
+    /// <see cref="ActionSettings.PressSpreadPercent"/> shorter or longer.
+    /// </summary>
+    public static int PressDuration(InputChord input, ActionSettings action, IRandomSource random)
     {
-        if (!action.RandomizeHoldDuration)
+        int press = Math.Max(0, input.PressMs);
+        if (!action.RandomizeHoldDuration || press == 0)
         {
-            return Math.Max(0, action.HoldDurationMs);
+            return press;
         }
 
-        int min = Math.Max(0, Math.Min(action.MinHoldDurationMs, action.MaxHoldDurationMs));
-        int max = Math.Max(0, Math.Max(action.MinHoldDurationMs, action.MaxHoldDurationMs));
-        return random.NextInt(min, max);
+        int spread = (int)Math.Round(press * Math.Clamp(action.PressSpreadPercent, 0, 100) / 100.0);
+        return random.NextInt(press - spread, press + spread);
     }
 
     /// <summary>

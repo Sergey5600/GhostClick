@@ -121,10 +121,11 @@ public class ScriptPlannerTests
     }
 
     [Fact]
-    public void Press_WrapsTheKeyInItsModifiersAndHoldsForTheProfilesHoldTime()
+    public void Press_WrapsTheKeyInItsModifiersAndHoldsForItsPressTime()
     {
-        var profile = Script(new PressBlock { Id = "copy", Input = new InputChord(VirtualKey.C, KeyModifiers.Control | KeyModifiers.Shift) });
-        profile.Action.HoldDurationMs = 30;
+        var copy = new PressBlock { Id = "copy", Input = new InputChord(VirtualKey.C, KeyModifiers.Control | KeyModifiers.Shift) };
+        var profile = Script(copy);
+        copy.Input.PressMs = 30;
 
         var steps = Plan(profile, ScreenPoint.Zero);
 
@@ -137,6 +138,21 @@ public class ScriptPlannerTests
         // Every press of the block tells the window gate it is a keyboard action.
         Assert.All(steps.Where(s => s.Kind == EngineStepKind.KeyDown), s => Assert.Equal(ActionKind.Keyboard, s.Device));
         Assert.All(steps.Where(s => s.Key is VirtualKey.LeftControl or VirtualKey.LeftShift), s => Assert.True(s.IsModifier));
+    }
+
+    [Fact]
+    public void Press_VariesAroundItsPressTimeWithTheProfilesSpread()
+    {
+        var press = new PressBlock { Id = "p", Input = new InputChord(VirtualKey.E) };
+        var profile = Script(press);
+        press.Input.PressMs = 100;
+        profile.Action.RandomizeHoldDuration = true;
+        profile.Action.PressSpreadPercent = 30;
+
+        // 100 ms +/- 30 % at 0.0: 70 ms.
+        var steps = Plan(profile, ScreenPoint.Zero, new ScriptedRandomSource(0.0));
+
+        Assert.Equal(new[] { "KeyDown E", "Wait 70 ms", "KeyUp E" }, steps.Select(s => s.ToString()));
     }
 
     [Fact]
@@ -367,12 +383,24 @@ public class ScriptPlannerTests
         Assert.IsType<ScriptPlanner>(RunPlanner.For(profile, cursor, Screen));
     }
 
-    /// <summary>A script profile, run once, with the default 100 ms pause and no hold time.</summary>
+    /// <summary>
+    /// A script profile, run once, with the default 100 ms pause and «Нажать» blocks that
+    /// release at once, so a test about order and pauses is not about press times too.
+    /// </summary>
     internal static ClickerProfile Script(params ScriptBlock[] blocks)
     {
         var profile = ClickerProfile.CreateDefault("Script");
         profile.Kind = ProfileKind.Script;
         profile.Script.Blocks = blocks.ToList();
+
+        foreach (var press in ScriptSettings.Walk(profile.Script.Blocks, enabledOnly: false).OfType<PressBlock>())
+        {
+            if (press.Input is { } input)
+            {
+                input.PressMs = 0;
+            }
+        }
+
         return profile;
     }
 

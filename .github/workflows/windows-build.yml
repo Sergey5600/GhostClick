@@ -94,7 +94,7 @@ jobs:
         shell: pwsh
         run: |
           $required = 'GhostClick.exe', 'wwwroot/index.html', 'wwwroot/app.js', 'wwwroot/host.js',
-                      'wwwroot/layout.js', 'wwwroot/app.css', 'wwwroot/vendor/preact.min.js',
+                      'wwwroot/i18n.js', 'wwwroot/layout.js', 'wwwroot/app.css', 'wwwroot/vendor/preact.min.js',
                       'wwwroot/vendor/htm.min.js', 'wwwroot/fonts/Geist-Variable.woff2'
           foreach ($file in $required) {
             if (-not (Test-Path "publish/app/$file")) { throw "The published app is missing $file" }
@@ -386,7 +386,7 @@ jobs:
 
           A new version installs over the old one and keeps your profiles. To uninstall GhostClick, go to **Settings → Apps**.
 
-          The GhostClick interface is in Russian for now.
+          The GhostClick interface speaks English and Russian: switch with **RU / EN** at the top of the window.
 
           ---
 
@@ -399,6 +399,8 @@ jobs:
           GhostClick появится в меню «Пуск» и на рабочем столе. Нужна 64-битная Windows 10 или 11; если на компьютере нет компонента Microsoft Edge WebView2, установщик поставит его сам.
 
           Новая версия ставится поверх старой, профили сохраняются. Удалить программу можно через **Параметры → Приложения**.
+
+          Интерфейс GhostClick на русском и английском: язык переключается кнопками **RU / EN** вверху окна.
           EOF
           # A release made by hand on the Releases page for this tag (which is what pushed the
           # tag) gets the setup attached; if it was published with no text, it also gets the

@@ -198,7 +198,7 @@ public sealed class ScriptPlanner : IRunPlanner
         state.PauseDue = true;
     }
 
-    /// <summary>Down, held for the profile's hold time, up; modifiers around it all.</summary>
+    /// <summary>Down, held for the input's own press time, up; modifiers around it all.</summary>
     private IEnumerable<EngineStep> Press(PressBlock block)
     {
         foreach (var step in TravelTo(block.At))
@@ -220,7 +220,7 @@ public sealed class ScriptPlanner : IRunPlanner
 
         yield return PlanSteps.Down(input.Key).WithDevice(device);
 
-        int hold = PlanSteps.HoldDuration(_profile.Action, _random);
+        int hold = PlanSteps.PressDuration(input, _profile.Action, _random);
         if (hold > 0)
         {
             yield return EngineStep.Wait(hold);

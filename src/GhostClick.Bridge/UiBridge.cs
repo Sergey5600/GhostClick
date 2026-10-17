@@ -34,6 +34,10 @@ public interface IUiChannel
 /// counters.
 /// </para>
 /// <para>
+/// It also keeps the interface language (<see cref="UiSettings"/>, outside every profile) and
+/// writes its own log lines and notices in it.
+/// </para>
+/// <para>
 /// Every message in and out is handled on the UI thread. Engine and hotkey events arrive on
 /// their own threads and are posted over with <see cref="IUiChannel.Post"/>, never invoked
 /// synchronously: <see cref="AutoClickerEngine.Stop"/> blocks its caller until the run
@@ -52,10 +56,13 @@ public sealed class UiBridge : IDisposable
     private readonly ClickerHost _host;
     private readonly SwitchableInputInjector _injector;
     private readonly IUiChannel _channel;
+    private readonly IUiSettingsStore _settingsStore;
     private readonly Func<DateTime> _now;
     private readonly Stopwatch _runTime = new();
     private readonly List<object> _pendingLogs = new();
 
+    private UiSettings _settings = new();
+    private UiText _text = UiText.Russian;
     private string _savedJson = string.Empty;
     private string _sentIssues = string.Empty;
     private ScriptLocation? _sentBlock;
@@ -67,13 +74,26 @@ public sealed class UiBridge : IDisposable
     private bool _hotkeysAvailable = true;
     private bool _disposed;
 
-    public UiBridge(ClickerHost host, SwitchableInputInjector injector, IUiChannel channel, Func<DateTime>? now = null)
+    /// <summary>
+    /// <paramref name="settings"/> is where the interface language is kept between runs; in
+    /// memory when omitted.
+    /// </summary>
+    public UiBridge(
+        ClickerHost host,
+        SwitchableInputInjector injector,
+        IUiChannel channel,
+        Func<DateTime>? now = null,
+        IUiSettingsStore? settings = null)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _injector = injector ?? throw new ArgumentNullException(nameof(injector));
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
+        _settingsStore = settings ?? new InMemoryUiSettingsStore();
         _now = now ?? (() => DateTime.Now);
     }
+
+    /// <summary>The interface language: <c>ru</c> or <c>en</c>.</summary>
+    public string Language => _text.Language;
 
     private ClickerProfile Current => _host.Profiles.Current;
 
@@ -91,6 +111,8 @@ public sealed class UiBridge : IDisposable
         }
 
         _started = true;
+        _settings = _settingsStore.Load();
+        _text = UiText.For(_settings.Language);
         _host.Profiles.NewProfileFactory = UiDefaults.CreateProfile;
         _injector.Recorder.Capacity = DryRunEventCapacity;
         Subscribe();
@@ -102,12 +124,12 @@ public sealed class UiBridge : IDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _hotkeysAvailable = false;
-            Log("Горячие клавиши недоступны: " + ex.Message);
+            Log(_text.HotkeysUnavailable + ex.Message);
         }
 
         ApplyToEngine();
         _savedJson = ProfileSerializer.Serialize(Current);
-        Log($"Профиль «{Current.Name}» загружен");
+        Log(_text.ProfileLoaded(Current.Name));
     }
 
     /// <summary>Handles one message from the page. Malformed messages are ignored.</summary>
@@ -212,6 +234,9 @@ public sealed class UiBridge : IDisposable
             case "listen":
                 SetListening(ReadBool(message, "value"));
                 break;
+            case "setLanguage":
+                SetLanguage(ReadString(message, "lang"));
+                break;
         }
     }
 
@@ -237,6 +262,7 @@ public sealed class UiBridge : IDisposable
             dryRun = _injector.DryRun,
             backend = _injector.Name,
             hotkeys = _hotkeysAvailable,
+            lang = _text.Language,
         });
 
         foreach (var entry in _pendingLogs)
@@ -282,6 +308,32 @@ public sealed class UiBridge : IDisposable
 
         _injector.DryRun = value;
         _injector.ResetDryRunCursor();
+    }
+
+    // ------------------------------------------------------------------ language
+
+    /// <summary>
+    /// The page has switched languages: from now on the log and notices follow, and the choice
+    /// is kept for the next start. Lines already in the log stay as they were written.
+    /// </summary>
+    private void SetLanguage(string? language)
+    {
+        if (!UiText.IsLanguage(language) || language == _text.Language)
+        {
+            return;
+        }
+
+        _text = UiText.For(language);
+        _settings.Language = _text.Language;
+
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log(_text.LanguageNotSaved + ex.Message);
+        }
     }
 
     // ------------------------------------------------------------------ editing
@@ -358,7 +410,7 @@ public sealed class UiBridge : IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Toast("Не удалось сохранить профиль: " + ex.Message, error: true);
+            Toast(_text.SaveFailed + ex.Message, error: true);
             return;
         }
         finally
@@ -371,8 +423,8 @@ public sealed class UiBridge : IDisposable
 
         _savedJson = ProfileSerializer.Serialize(Current);
         SendProfile();
-        Toast($"Профиль «{name}» сохранён");
-        Log($"Профиль «{name}» сохранён");
+        Toast(_text.ProfileSaved(name));
+        Log(_text.ProfileSaved(name));
     }
 
     private void RevertProfile() => Reload(Current.Name, stopRun: false);
@@ -402,13 +454,13 @@ public sealed class UiBridge : IDisposable
         }
         catch (Exception ex) when (ex is ProfileNotFoundException or ProfileFormatException or IOException)
         {
-            Toast($"Не удалось загрузить профиль «{name}»: {ex.Message}", error: true);
+            Toast(_text.LoadFailed(name, ex.Message), error: true);
             SendProfile();
             return;
         }
 
         AfterProfileSwap();
-        Log($"Профиль «{Current.Name}» загружен");
+        Log(_text.ProfileLoaded(Current.Name));
     }
 
     /// <summary>A new clicker, or with <paramref name="kind"/> <c>script</c>, a new script.</summary>
@@ -420,7 +472,7 @@ public sealed class UiBridge : IDisposable
         }
 
         bool script = kind == "script";
-        var name = UniqueName(i => script ? $"Сценарий {i}" : $"Профиль {i}", _host.Profiles.AvailableProfiles.Count + 1);
+        var name = UniqueName(script ? _text.NewScriptName : _text.NewProfileName, _host.Profiles.AvailableProfiles.Count + 1);
 
         try
         {
@@ -428,12 +480,12 @@ public sealed class UiBridge : IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Toast("Не удалось создать профиль: " + ex.Message, error: true);
+            Toast(_text.CreateFailed + ex.Message, error: true);
             return;
         }
 
         AfterProfileSwap();
-        Log($"Профиль «{name}» создан");
+        Log(_text.ProfileCreated(name));
     }
 
     private void DuplicateProfile()
@@ -449,7 +501,7 @@ public sealed class UiBridge : IDisposable
             return;
         }
 
-        var name = UniqueName(i => i == 1 ? $"{source} (копия)" : $"{source} (копия {i})", 1);
+        var name = UniqueName(i => _text.CopyName(source, i), 1);
 
         try
         {
@@ -458,12 +510,12 @@ public sealed class UiBridge : IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Toast("Не удалось сохранить копию: " + ex.Message, error: true);
+            Toast(_text.CopyFailed + ex.Message, error: true);
             return;
         }
 
         AfterProfileSwap();
-        Log($"Профиль «{name}» создан из «{source}»");
+        Log(_text.ProfileCopied(name, source));
     }
 
     private void AfterProfileSwap()
@@ -523,11 +575,11 @@ public sealed class UiBridge : IDisposable
 
         if (e.State == EngineState.Paused)
         {
-            Log("Пауза");
+            Log(_text.Paused);
         }
         else if (e.PreviousState == EngineState.Paused && e.State == EngineState.Running)
         {
-            Log("Продолжено");
+            Log(_text.Resumed);
         }
 
         SendState();
@@ -540,9 +592,8 @@ public sealed class UiBridge : IDisposable
         _injector.ResetDryRunCursor();
         _injector.Recorder.Clear();
 
-        var actions = e.Profile.Kind == ProfileKind.Script
-            ? DescribeScript(e.Profile.Script)
-            : string.Join(" + ", e.Profile.Action.Inputs.Select(i => KeyCodes.Describe(i.Key, i.Modifiers)));
+        int? scriptBlocks = e.Profile.Kind == ProfileKind.Script ? ScriptSettings.Walk(e.Profile.Script.Blocks).Count() : null;
+        var inputs = e.Profile.Action.Inputs.Select(i => (i.Key, i.Modifiers)).ToArray();
         bool dryRun = _injector.DryRun;
         int timeLimit = e.Profile.Safety.MaxRunDurationSeconds;
 
@@ -550,7 +601,11 @@ public sealed class UiBridge : IDisposable
         {
             _runTimeLimitSeconds = timeLimit;
             _runTime.Restart();
-            Log($"Старт · {(actions.Length > 0 ? actions : "нет действий")}{(dryRun ? " · dry run" : string.Empty)}");
+
+            var actions = scriptBlocks is { } blocks
+                ? _text.ScriptSummary(blocks)
+                : string.Join(" + ", inputs.Select(i => KeyCodes.Describe(i.Key, i.Modifiers, _text.Language)));
+            Log($"{_text.Started} · {(actions.Length > 0 ? actions : _text.NoActions)}{(dryRun ? " · dry run" : string.Empty)}");
             SendState();
         });
     }
@@ -559,11 +614,11 @@ public sealed class UiBridge : IDisposable
     {
         _runTime.Stop();
         SendBlock(null);
-        Log($"{StopReasonText(e)} · {e.ActionsPerformed} {Plural(e.ActionsPerformed, "клик", "клика", "кликов")}");
+        Log($"{StopReasonText(e)} · {e.ActionsPerformed} {_text.Clicks(e.ActionsPerformed)}");
 
         if (e.Reason == StopReason.Error)
         {
-            Toast(e.Error?.Message ?? "Кликер остановлен из-за ошибки", error: true);
+            Toast(e.Error?.Message ?? _text.StoppedByError, error: true);
         }
 
         SendState();
@@ -735,34 +790,40 @@ public sealed class UiBridge : IDisposable
 
     private string StopReasonText(EngineStoppedEventArgs e) => e.Reason switch
     {
-        StopReason.User => "Остановлено",
-        StopReason.Completed => "Выполнено",
-        StopReason.HoldReleased => "Клавиша отпущена",
-        StopReason.Failsafe => "Аварийная остановка",
+        StopReason.User => _text.StopUser,
+        StopReason.Completed => _text.StopCompleted,
+        StopReason.HoldReleased => _text.StopHoldReleased,
+        StopReason.Failsafe => _text.StopFailsafe,
         // The limit of the run that stopped, not of the profile as it is now edited.
-        StopReason.TimeLimit => $"Лимит времени {FormatDuration(_runTimeLimitSeconds)}",
-        StopReason.ActionLimit => "Лимит действий",
-        StopReason.UserCursorMoved => "Остановлено: мышь сдвинута",
-        StopReason.Error => "Ошибка: " + (e.Error?.Message ?? "неизвестно"),
-        _ => "Остановлено",
+        StopReason.TimeLimit => _text.StopTimeLimit(_text.Duration(_runTimeLimitSeconds)),
+        StopReason.ActionLimit => _text.StopActionLimit,
+        StopReason.UserCursorMoved => _text.StopCursorMoved,
+        StopReason.Error => _text.StopError(e.Error?.Message ?? _text.Unknown),
+        _ => _text.StopUser,
     };
 
-    private static string FormatDuration(int seconds) => seconds % 60 == 0
-        ? $"{seconds / 60} мин"
-        : $"{seconds} с";
+    private string Describe(ProfileValidationException exception, ScriptSettings? script = null) =>
+        Describe(exception.Errors, _text, script);
+
+    private string Describe(IReadOnlyList<ValidationError> errors, ScriptSettings? script = null) =>
+        Describe(errors, _text, script);
 
     /// <summary>
     /// The first validation problem, in the interface's words where there are some. A problem
     /// in a script block names the block, which is why the script is wanted.
     /// </summary>
-    public static string Describe(ProfileValidationException exception, ScriptSettings? script = null) =>
-        Describe(exception.Errors, script);
+    public static string Describe(ProfileValidationException exception, UiText text, ScriptSettings? script = null) =>
+        Describe(exception.Errors, text, script);
 
-    private static string Describe(IReadOnlyList<ValidationError> errors, ScriptSettings? script = null)
+    /// <inheritdoc cref="Describe(ProfileValidationException, UiText, ScriptSettings?)"/>
+    public static string Describe(IReadOnlyList<ValidationError> errors, UiText text, ScriptSettings? script = null)
     {
+        ArgumentNullException.ThrowIfNull(errors);
+        ArgumentNullException.ThrowIfNull(text);
+
         if (errors.Count == 0)
         {
-            return "Профиль содержит ошибки";
+            return text.ProfileHasErrors;
         }
 
         var error = errors[0];
@@ -773,36 +834,18 @@ public sealed class UiBridge : IDisposable
 
         return error.Path switch
         {
-            "Target.Route" => "Добавьте хотя бы одну точку маршрута",
-            "Action.Inputs" => "Выберите хотя бы одно действие",
-            "Interval.DelayMs" => "Интервал не может быть отрицательным",
-            "Interval.MinDelayMs" => "Минимальный интервал не может быть отрицательным",
-            "Interval.MaxDelayMs" => "Максимальный интервал меньше минимального",
-            "Repeat.Count" => "Количество повторов должно быть не меньше 1",
-            "Action.MaxHoldDurationMs" => "Максимальное удержание меньше минимального",
-            "Hotkeys.StartStop" => "В режиме удержания нужна клавиша «Старт / Стоп»",
-            "Name" => "У профиля должно быть имя",
+            "Target.Route" => text.NeedsPoint,
+            "Action.Inputs" => text.NeedsAction,
+            "Interval.DelayMs" => text.NegativeDelay,
+            "Interval.MinDelayMs" => text.NegativeMinDelay,
+            "Interval.MaxDelayMs" => text.MaxBelowMin,
+            "Repeat.Count" => text.CountBelowOne,
+            "Hotkeys.StartStop" => text.HoldNeedsStartKey,
+            "Name" => text.NeedsName,
+            _ when error.Path.StartsWith("Action.Inputs[", StringComparison.Ordinal) && error.Path.EndsWith(".PressMs", StringComparison.Ordinal) => text.NegativePress,
+            _ when error.Path.StartsWith("Action.Inputs[", StringComparison.Ordinal) && error.Path.EndsWith(".HoldMs", StringComparison.Ordinal) => text.HoldTooShort,
             _ => error.Message,
         };
-    }
-
-    private static string DescribeScript(ScriptSettings script)
-    {
-        int blocks = ScriptSettings.Walk(script.Blocks).Count();
-        return $"сценарий, {blocks} {Plural(blocks, "блок", "блока", "блоков")}";
-    }
-
-    private static string Plural(long n, string one, string few, string many)
-    {
-        long mod100 = n % 100;
-        long mod10 = n % 10;
-
-        if (mod10 == 1 && mod100 != 11)
-        {
-            return one;
-        }
-
-        return mod10 is >= 2 and <= 4 && mod100 is < 12 or > 14 ? few : many;
     }
 
     private static string? ReadString(JsonElement message, string name) =>

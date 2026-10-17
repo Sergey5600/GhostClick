@@ -37,6 +37,29 @@ public enum ClickType
     Double = 1,
 }
 
+/// <summary>How one input of the action is pressed.</summary>
+public enum PressMode
+{
+    /// <summary>Pressed and released on every action tick, held for <c>InputChord.PressMs</c>.</summary>
+    Click = 0,
+
+    /// <summary>Held down; <see cref="HoldMode"/> says for how long.</summary>
+    Hold = 1,
+}
+
+/// <summary>How long an input in <see cref="PressMode.Hold"/> stays down.</summary>
+public enum HoldMode
+{
+    /// <summary>
+    /// Down for the whole run: pressed when the run starts and released on pause, stop and
+    /// emergency stop (pressed again on resume). The interval does not touch it.
+    /// </summary>
+    WhileRunning = 0,
+
+    /// <summary>Pressed on every action tick and released after <c>InputChord.HoldMs</c>.</summary>
+    Timed = 1,
+}
+
 /// <summary>Where the click is delivered.</summary>
 public enum TargetMode
 {

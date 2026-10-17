@@ -17,6 +17,7 @@ public class PlannerTests
         profile.Repeat.Mode = RepeatMode.FixedCount;
         profile.Repeat.Count = 3;
         profile.Interval.DelayMs = 50;
+        profile.Action.Inputs[0].PressMs = 0;
 
         var steps = Plan(profile, new ScreenPoint(400, 300));
 
@@ -76,12 +77,12 @@ public class PlannerTests
     }
 
     [Fact]
-    public void HoldDuration_InsertsAWaitBetweenPressAndRelease()
+    public void PressMs_HoldsEachClickForItsPressTime()
     {
         var profile = ClickerProfile.CreateDefault();
         profile.Repeat.Mode = RepeatMode.FixedCount;
         profile.Repeat.Count = 1;
-        profile.Action.HoldDurationMs = 35;
+        profile.Action.Inputs[0].PressMs = 35;
 
         var steps = Plan(profile, ScreenPoint.Zero);
 
@@ -184,6 +185,7 @@ public class PlannerTests
             new ClickPoint(10, 10, delayMs: 250),
             new ClickPoint(20, 20), // no delay of its own -> profile interval
         ];
+        profile.Action.Inputs[0].PressMs = 0;
 
         var waits = Plan(profile, ScreenPoint.Zero)
             .Where(s => s.Kind == EngineStepKind.Wait)
@@ -221,7 +223,7 @@ public class PlannerTests
         var profile = ClickerProfile.CreateDefault();
         profile.Repeat.Mode = RepeatMode.FixedCount;
         profile.Repeat.Count = 1;
-        profile.Action.Inputs = [new InputChord(VirtualKey.F, KeyModifiers.Control | KeyModifiers.Shift)];
+        profile.Action.Inputs = [new InputChord(VirtualKey.F, KeyModifiers.Control | KeyModifiers.Shift) { PressMs = 0 }];
 
         var steps = Plan(profile, ScreenPoint.Zero);
 
@@ -272,6 +274,7 @@ public class PlannerTests
                 "KeyDown LeftControl",
                 "MouseDown Left",
                 "KeyDown E",
+                "Wait 30 ms",
                 "KeyUp E",
                 "MouseUp Left",
                 "KeyUp LeftControl",
@@ -298,9 +301,9 @@ public class PlannerTests
         Assert.Equal(
             new[]
             {
-                "MouseDown Left", "MouseDown Right", "MouseUp Right", "MouseUp Left",
+                "MouseDown Left", "MouseDown Right", "Wait 30 ms", "MouseUp Right", "MouseUp Left",
                 "Wait 30 ms",
-                "MouseDown Left", "MouseDown Right", "MouseUp Right", "MouseUp Left",
+                "MouseDown Left", "MouseDown Right", "Wait 30 ms", "MouseUp Right", "MouseUp Left",
             },
             steps.Select(s => s.ToString()));
         Assert.Single(steps, s => s.CompletesAction);
@@ -334,25 +337,160 @@ public class PlannerTests
     }
 
     [Fact]
-    public void RandomizedHold_DrawsEachHoldFromTheConfiguredRange()
+    public void RandomizedPress_VariesAroundThePressTimeByTheSpread()
     {
         var profile = ClickerProfile.CreateDefault();
         profile.Repeat.Mode = RepeatMode.FixedCount;
         profile.Repeat.Count = 3;
         profile.Interval.DelayMs = 0;
-        profile.Action.HoldDurationMs = 500;
+        profile.Action.Inputs[0].PressMs = 100;
         profile.Action.RandomizeHoldDuration = true;
-        profile.Action.MinHoldDurationMs = 20;
-        profile.Action.MaxHoldDurationMs = 40;
+        profile.Action.PressSpreadPercent = 30;
 
-        // 0.0 -> 20 ms, 0.5 -> 30 ms, 0.99 -> 40 ms.
+        // 100 ms +/- 30 %: 0.0 -> 70 ms, 0.5 -> 100 ms, 0.99 -> 130 ms.
         var steps = Plan(profile, ScreenPoint.Zero, new ScriptedRandomSource(0.0, 0.5, 0.99));
 
-        // The interval is zero, so the only non-zero waits are the holds.
+        // The interval is zero, so the only non-zero waits are the presses.
         var holds = steps
             .Where(s => s.Kind == EngineStepKind.Wait && s.Delay > TimeSpan.Zero)
             .Select(s => s.Delay.TotalMilliseconds);
-        Assert.Equal(new double[] { 20, 30, 40 }, holds);
+        Assert.Equal(new double[] { 70, 100, 130 }, holds);
+    }
+
+    [Fact]
+    public void RandomizedPress_DrawsForEveryInputOnItsOwn()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 1;
+        profile.Action.RandomizeHoldDuration = true;
+        profile.Action.PressSpreadPercent = 50;
+        profile.Action.Inputs = [new InputChord(VirtualKey.LeftButton) { PressMs = 40 }, new InputChord(VirtualKey.E) { PressMs = 200 }];
+
+        // Left: 40 +/- 20 at 0.0 -> 20 ms. E: 200 +/- 100 at 0.75 -> 250 ms.
+        var steps = Plan(profile, ScreenPoint.Zero, new ScriptedRandomSource(0.0, 0.75));
+
+        Assert.Equal(
+            new[] { "MouseDown Left", "KeyDown E", "Wait 20 ms", "MouseUp Left", "Wait 230 ms", "KeyUp E" },
+            steps.Select(s => s.ToString()));
+    }
+
+    [Fact]
+    public void EachInput_IsReleasedAfterItsOwnPressTime()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 1;
+        profile.Action.Inputs = [new InputChord(VirtualKey.LeftButton) { PressMs = 80 }, new InputChord(VirtualKey.E) { PressMs = 20 }];
+
+        var steps = Plan(profile, ScreenPoint.Zero);
+
+        Assert.Equal(
+            new[] { "MouseDown Left", "KeyDown E", "Wait 20 ms", "KeyUp E", "Wait 60 ms", "MouseUp Left" },
+            steps.Select(s => s.ToString()));
+
+        // The last release ends the action, whichever input it is.
+        var completing = Assert.Single(steps, s => s.CompletesAction);
+        Assert.Equal(EngineStepKind.MouseUp, completing.Kind);
+    }
+
+    [Fact]
+    public void TimedHold_IsHeldForItsHoldTimeAlongsideTheClicks()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 2;
+        profile.Interval.DelayMs = 100;
+        profile.Action.Inputs =
+        [
+            InputChord.Mouse(MouseButton.Left),
+            new InputChord(VirtualKey.W) { Mode = PressMode.Hold, Hold = HoldMode.Timed, HoldMs = 500 },
+        ];
+
+        var steps = Plan(profile, ScreenPoint.Zero);
+
+        var tick = new[] { "MouseDown Left", "KeyDown W", "Wait 30 ms", "MouseUp Left", "Wait 470 ms", "KeyUp W" };
+        Assert.Equal(tick.Append("Wait 100 ms").Concat(tick), steps.Select(s => s.ToString()));
+        Assert.Equal(2, steps.Count(s => s.CompletesAction));
+    }
+
+    [Fact]
+    public void DoubleClick_ClicksTwiceButHoldsATimedHoldOnce()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 1;
+        profile.Action.ClickType = ClickType.Double;
+        profile.Action.DoubleClickGapMs = 40;
+        profile.Action.Inputs =
+        [
+            InputChord.Mouse(MouseButton.Left),
+            new InputChord(VirtualKey.W) { Mode = PressMode.Hold, Hold = HoldMode.Timed, HoldMs = 200 },
+        ];
+
+        var steps = Plan(profile, ScreenPoint.Zero);
+
+        Assert.Equal(
+            new[]
+            {
+                "MouseDown Left", "KeyDown W", "Wait 30 ms", "MouseUp Left",
+                "Wait 40 ms", "MouseDown Left", "Wait 30 ms", "MouseUp Left",
+                "Wait 100 ms", "KeyUp W",
+            },
+            steps.Select(s => s.ToString()));
+        Assert.Single(steps, s => s.CompletesAction);
+    }
+
+    [Fact]
+    public void HeldWhileRunning_StaysOutOfTheTicksAndKeepsItsModifiersDown()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 2;
+        profile.Interval.DelayMs = 100;
+        profile.Action.Inputs =
+        [
+            new InputChord(VirtualKey.W, KeyModifiers.Shift) { Mode = PressMode.Hold },
+            new InputChord(VirtualKey.E, KeyModifiers.Shift | KeyModifiers.Control),
+        ];
+
+        var steps = Plan(profile, ScreenPoint.Zero);
+
+        // W belongs to the engine, which holds it for the whole run. Shift stays down with it,
+        // so the ticks only add Ctrl: releasing Shift after E would let go of the sprint too.
+        var tick = new[] { "KeyDown LeftControl", "KeyDown E", "Wait 30 ms", "KeyUp E", "KeyUp LeftControl" };
+        Assert.Equal(tick.Append("Wait 100 ms").Concat(tick), steps.Select(s => s.ToString()));
+    }
+
+    [Fact]
+    public void HeldWhileRunning_KeyIsNotAlsoClickedOnTheTicks()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 1;
+        profile.Action.Inputs = [new InputChord(VirtualKey.W) { Mode = PressMode.Hold }, new InputChord(VirtualKey.W, KeyModifiers.Control)];
+
+        var steps = Plan(profile, ScreenPoint.Zero);
+
+        Assert.Equal(new[] { "Tick" }, steps.Select(s => s.ToString()));
+    }
+
+    [Fact]
+    public void OnlyHeldInputs_TickEmptilyOnTheIntervalAndStillCount()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Repeat.Mode = RepeatMode.FixedCount;
+        profile.Repeat.Count = 3;
+        profile.Interval.DelayMs = 1000;
+        profile.Jitter.PositionJitterEnabled = true;
+        profile.Action.Inputs = [new InputChord(VirtualKey.W) { Mode = PressMode.Hold }, new InputChord(VirtualKey.A) { Mode = PressMode.Hold }];
+
+        var steps = Plan(profile, new ScreenPoint(300, 300), new SystemRandomSource(seed: 5));
+
+        // Three ticks a second apart, so «3 times» holds W + A for the length of three
+        // intervals; nothing to click, so no jitter nudges either.
+        Assert.Equal(new[] { "Tick", "Wait 1000 ms", "Tick", "Wait 1000 ms", "Tick" }, steps.Select(s => s.ToString()));
+        Assert.Equal(3, steps.Count(s => s.CompletesAction));
     }
 
     [Fact]
@@ -424,6 +562,7 @@ public class PlannerTests
         profile.Interval.RandomizeEnabled = true;
         profile.Interval.MinDelayMs = 80;
         profile.Interval.MaxDelayMs = 120;
+        profile.Action.Inputs[0].PressMs = 0;
 
         var planner = new ActionPlanner(
             profile,

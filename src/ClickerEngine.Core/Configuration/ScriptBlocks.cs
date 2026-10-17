@@ -78,7 +78,7 @@ public abstract class InputBlock : ScriptBlock
     }
 }
 
-/// <summary>«Нажать»: press and release, held for the profile's hold time.</summary>
+/// <summary>«Нажать»: press and release, held for the input's own press time.</summary>
 public sealed class PressBlock : InputBlock
 {
     public override string Type => "press";

@@ -49,7 +49,9 @@ public static class ProfileSerializer
                 throw new ProfileFormatException("The profile document is not a JSON object.");
             }
 
+            int version = Read(document["version"], 1);
             MigrateSingleAction(document);
+            MigratePressLength(document, version);
             StampCurrentVersion(document);
 
             return document.Deserialize<ClickerProfile>(Options)
@@ -89,14 +91,65 @@ public static class ProfileSerializer
 
     /// <summary>
     /// Version 3 only added fields (<c>kind</c>, <c>script</c>) whose defaults are what an older
-    /// file meant: a clicker. Such a file needs no migration, but once read it is a version 3
-    /// profile, and is written back as one.
+    /// file meant: a clicker. Such a file needs no migration of its own, but once read it is a
+    /// profile of the current version, and is written back as one.
     /// </summary>
     private static void StampCurrentVersion(JsonObject document)
     {
         if (Read(document["version"], 1) < ClickerProfile.CurrentVersion)
         {
             document["version"] = ClickerProfile.CurrentVersion;
+        }
+    }
+
+    /// <summary>
+    /// Up to schema 3 there was one press length for the whole profile (<c>holdDurationMs</c>
+    /// in the action, or a random one between <c>minHoldDurationMs</c> and
+    /// <c>maxHoldDurationMs</c>), used by the clicker's inputs and by the script's «Нажать»
+    /// blocks alike. Schema 4 gives every input its own <c>pressMs</c> and randomizes around
+    /// it: the old length moves onto each of those inputs, and one that released at once gets
+    /// the new default.
+    /// </summary>
+    private static void MigratePressLength(JsonObject document, int version)
+    {
+        if (version >= 4 || document["action"] is not JsonObject action)
+        {
+            return;
+        }
+
+        int hold = Read(action["holdDurationMs"], 0);
+        if (hold > 0)
+        {
+            if (action["inputs"] is JsonArray inputs)
+            {
+                foreach (var input in inputs.OfType<JsonObject>())
+                {
+                    input["pressMs"] = hold;
+                }
+            }
+
+            if (document["script"] is JsonObject script)
+            {
+                SetPressLength(script["blocks"] as JsonArray, hold);
+            }
+        }
+
+        action.Remove("holdDurationMs");
+        action.Remove("minHoldDurationMs");
+        action.Remove("maxHoldDurationMs");
+    }
+
+    /// <summary>Gives the input of every «Нажать» block, nested ones included, a press length.</summary>
+    private static void SetPressLength(JsonArray? blocks, int pressMs)
+    {
+        foreach (var block in blocks?.OfType<JsonObject>() ?? Enumerable.Empty<JsonObject>())
+        {
+            if (Read(block["type"], string.Empty) == "press" && block["input"] is JsonObject input)
+            {
+                input["pressMs"] = pressMs;
+            }
+
+            SetPressLength(block["blocks"] as JsonArray, pressMs);
         }
     }
 

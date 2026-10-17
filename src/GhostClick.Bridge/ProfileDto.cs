@@ -17,8 +17,8 @@ public sealed class ProfileDto
 
     public BindingsDto Bind { get; set; } = new();
 
-    /// <summary>Everything pressed together on each tick.</summary>
-    public List<ChordDto> Actions { get; set; } = new();
+    /// <summary>Everything the clicker presses, and how each of them is pressed.</summary>
+    public List<ActionDto> Actions { get; set; } = new();
 
     public List<PointDto> Points { get; set; } = new();
 
@@ -93,6 +93,40 @@ public sealed class ChordDto
     public string Key { get; set; } = string.Empty;
 }
 
+/// <summary>
+/// One of the actions: a key or mouse button with modifier names, like <see cref="ChordDto"/>,
+/// plus how it is pressed. A page from before these fields sends none of them, and gets the
+/// defaults: a 30 ms click.
+/// </summary>
+public sealed class ActionDto
+{
+    public ActionDto()
+    {
+    }
+
+    public ActionDto(string key, params string[] mods)
+    {
+        Key = key;
+        Mods = mods.ToList();
+    }
+
+    public List<string> Mods { get; set; } = new();
+
+    public string Key { get; set; } = string.Empty;
+
+    /// <summary><c>click</c> (pressed on every tick) or <c>hold</c>.</summary>
+    public string Mode { get; set; } = "click";
+
+    /// <summary>How long each click is held down, in milliseconds.</summary>
+    public int Press { get; set; } = InputChord.DefaultPressMs;
+
+    /// <summary>For <c>hold</c>: <c>run</c> (down while the clicker runs) or <c>time</c> (down for <see cref="HoldMs"/> on every tick).</summary>
+    public string Hold { get; set; } = "run";
+
+    /// <summary>For <c>hold</c> + <c>time</c>: how long it is held on every tick, in milliseconds.</summary>
+    public int HoldMs { get; set; } = InputChord.DefaultHoldMs;
+}
+
 /// <summary>A route point; the fields the page does not show ride along unchanged.</summary>
 public sealed class PointDto
 {
@@ -142,7 +176,7 @@ public static class ProfileMapper
             },
             Actions = (profile.Action.Inputs ?? new())
                 .Where(i => i is not null && i.Key != VirtualKey.None)
-                .Select(i => ToDto(i.Key, i.Modifiers))
+                .Select(ToDto)
                 .ToList(),
             Points = (profile.Target.Route ?? new())
                 .Select(p => new PointDto { X = p.X, Y = p.Y, DelayMs = p.DelayMs, Label = p.Label, Enabled = p.Enabled })
@@ -207,11 +241,17 @@ public static class ProfileMapper
         if (dto.Actions is { } actions)
         {
             var inputs = new List<InputChord>();
-            foreach (var chord in actions)
+            foreach (var action in actions)
             {
-                if (chord is not null && KeyCodes.TryGetVirtualKey(chord.Key, out var key))
+                if (action is not null && KeyCodes.TryGetVirtualKey(action.Key, out var key))
                 {
-                    inputs.Add(new InputChord(key, KeyCodes.ParseModifiers(chord.Mods)));
+                    inputs.Add(new InputChord(key, KeyCodes.ParseModifiers(action.Mods))
+                    {
+                        Mode = action.Mode == "hold" ? PressMode.Hold : PressMode.Click,
+                        PressMs = action.Press,
+                        Hold = action.Hold == "time" ? HoldMode.Timed : HoldMode.WhileRunning,
+                        HoldMs = action.HoldMs,
+                    });
                 }
             }
 
@@ -309,6 +349,14 @@ public static class ProfileMapper
 
     private static ChordDto ToDto(VirtualKey key, KeyModifiers modifiers) =>
         new(KeyCodes.ToCode(key), KeyCodes.FormatModifiers(modifiers));
+
+    private static ActionDto ToDto(InputChord input) => new(KeyCodes.ToCode(input.Key), KeyCodes.FormatModifiers(input.Modifiers))
+    {
+        Mode = input.Mode == PressMode.Hold ? "hold" : "click",
+        Press = input.PressMs,
+        Hold = input.Hold == HoldMode.Timed ? "time" : "run",
+        HoldMs = input.HoldMs,
+    };
 
     private static HotkeyBinding ToBinding(ChordDto? chord, HotkeyBinding current)
     {

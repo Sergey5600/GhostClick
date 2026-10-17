@@ -87,7 +87,7 @@ public class EngineTests
         profile.Interval.DelayMs = 1;
 
         // A long hold means a stop is very likely to land between the press and the release.
-        profile.Action.HoldDurationMs = 5_000;
+        profile.Action.Inputs[0].PressMs = 5_000;
         engine.Profile = profile;
 
         engine.Start();
@@ -119,6 +119,8 @@ public class EngineTests
         Assert.Equal(EngineState.Paused, engine.State);
         Assert.True(engine.IsActive);
 
+        // A click that was already pressed is finished (30 ms) rather than left down; then nothing.
+        Thread.Sleep(80);
         long clicksWhilePaused = engine.Statistics.MouseClicks;
         Thread.Sleep(60);
         Assert.Equal(clicksWhilePaused, engine.Statistics.MouseClicks);

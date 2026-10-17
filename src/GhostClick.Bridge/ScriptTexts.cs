@@ -88,6 +88,7 @@ public static class ScriptTexts
             nameof(ScriptBlock.Type) when script?.Find(error.BlockId) is UnknownBlock { TypeName.Length: 0 } => "У блока не указан тип",
             nameof(ScriptBlock.Type) => "Этот блок не поддерживается этой версией GhostClick",
             nameof(InputBlock.Input) => "Выберите клавишу или кнопку мыши",
+            nameof(InputChord.PressMs) => "Длительность нажатия не может быть отрицательной",
             nameof(WaitBlock.DurationMs) => "Время ожидания не может быть отрицательным",
             nameof(WaitBlock.MinDurationMs) => "Минимальное время ожидания не может быть отрицательным",
             nameof(WaitBlock.MaxDurationMs) => "Максимальное время ожидания меньше минимального",
@@ -158,6 +159,7 @@ public static class ScriptTexts
     {
         (nameof(ScriptSettings.RunCount), false) => "count",
         (nameof(ScriptSettings.StepDelayMs), false) => "stepDelay",
+        (nameof(InputChord.PressMs), true) => "press",
         (nameof(WaitBlock.DurationMs), true) => "ms",
         (nameof(WaitBlock.MinDurationMs), true) => "minMs",
         (nameof(WaitBlock.MaxDurationMs), true) => "maxMs",

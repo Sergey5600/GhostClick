@@ -101,6 +101,10 @@ internal static class ScriptValidator
                 {
                     Add(nameof(InputBlock.Input), "Choose a key or mouse button.");
                 }
+                else if (block is PressBlock && input.Input.PressMs < 0)
+                {
+                    Add($"{nameof(InputBlock.Input)}.{nameof(InputChord.PressMs)}", "Press duration must not be negative.");
+                }
 
                 break;
 

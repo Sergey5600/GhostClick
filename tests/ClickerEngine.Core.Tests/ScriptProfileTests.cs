@@ -21,6 +21,7 @@ public class ScriptProfileTests
         profile.Script.Runs = ScriptRunMode.FixedCount;
         profile.Script.RunCount = 7;
         profile.Script.StepDelayMs = 40;
+        ((PressBlock)profile.Script.Blocks[0]).Input!.PressMs = 75;
 
         var json = ProfileSerializer.Serialize(profile);
         var copy = ProfileSerializer.Deserialize(json);
@@ -33,7 +34,7 @@ public class ScriptProfileTests
 
         var press = Assert.IsType<PressBlock>(copy.Script.Blocks[0]);
         Assert.Equal("Закинуть", press.Label);
-        Assert.Equal(new InputChord(VirtualKey.E, KeyModifiers.Control), press.Input);
+        Assert.Equal(new InputChord(VirtualKey.E, KeyModifiers.Control) { PressMs = 75 }, press.Input);
         Assert.Equal(new ScreenPoint(10, 20), press.At);
         Assert.IsType<HoldBlock>(copy.Script.Blocks[1]);
         Assert.Equal(new ScreenPoint(-5, 7), Assert.IsType<ReleaseBlock>(copy.Script.Blocks[2]).At);
@@ -93,8 +94,7 @@ public class ScriptProfileTests
         Assert.Equal(ClickerProfile.CurrentVersion, profile.Version);
         Assert.Equal("Fishing", profile.Name);
         Assert.Equal(ClickMode.Hold, profile.Mode);
-        Assert.Equal(InputChord.Mouse(MouseButton.Right), Assert.Single(profile.Action.Inputs));
-        Assert.Equal(25, profile.Action.HoldDurationMs);
+        Assert.Equal(new InputChord(VirtualKey.RightButton) { PressMs = 25 }, Assert.Single(profile.Action.Inputs));
         Assert.Equal(1200, profile.Interval.DelayMs);
         Assert.Equal(30, profile.Repeat.Count);
 
@@ -182,18 +182,45 @@ public class ScriptProfileTests
     }
 
     [Fact]
+    public void AVersionThreeScript_GivesItsPressesTheProfilesOldPressLength()
+    {
+        // Version 3 held every «Нажать» for the action's holdDurationMs; version 4 keeps a
+        // press length on each input, so the old one moves onto every press, nested or not.
+        const string versionThree = """
+            {
+              "version": 3,
+              "kind": "script",
+              "action": { "inputs": [ { "key": "leftButton" } ], "holdDurationMs": 60 },
+              "script": { "blocks": [
+                { "type": "press", "id": "a", "input": { "key": "e" } },
+                { "type": "hold", "id": "b", "input": { "key": "w" } },
+                { "type": "repeat", "id": "r", "count": 2, "blocks": [ { "type": "press", "id": "c", "input": { "key": "leftButton" } } ] }
+              ] }
+            }
+            """;
+
+        var profile = ProfileSerializer.Deserialize(versionThree);
+
+        Assert.Equal(ClickerProfile.CurrentVersion, profile.Version);
+        Assert.Equal(60, Assert.Single(profile.Action.Inputs).PressMs);
+        Assert.Equal(60, Assert.IsType<PressBlock>(profile.Script.Find("a")).Input!.PressMs);
+        Assert.Equal(60, Assert.IsType<PressBlock>(profile.Script.Find("c")).Input!.PressMs);
+        Assert.Equal(InputChord.DefaultPressMs, Assert.IsType<HoldBlock>(profile.Script.Find("b")).Input!.PressMs);
+        Assert.DoesNotContain("holdDurationMs", ProfileSerializer.Serialize(profile));
+    }
+
+    [Fact]
     public void ScriptsStillCheckWhatTheyShareWithClickers()
     {
         var profile = ScriptPlannerTests.Script(new PressBlock { Id = "a" });
         profile.Action.RandomizeHoldDuration = true;
-        profile.Action.MinHoldDurationMs = 50;
-        profile.Action.MaxHoldDurationMs = 10;
+        profile.Action.PressSpreadPercent = 150;
         profile.Mode = ClickMode.Hold;
         profile.Hotkeys.StartStop = new HotkeyBinding();
 
         var paths = ProfileValidator.Validate(profile).Select(e => e.Path).ToArray();
 
-        Assert.Contains("Action.MaxHoldDurationMs", paths);
+        Assert.Contains("Action.PressSpreadPercent", paths);
         Assert.Contains("Hotkeys.StartStop", paths);
     }
 

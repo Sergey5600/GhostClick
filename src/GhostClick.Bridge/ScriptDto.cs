@@ -40,6 +40,10 @@ public sealed class BlockDto
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ChordDto? Input { get; set; }
 
+    /// <summary>press: how long the key is held down, in milliseconds; none = 30.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Press { get; set; }
+
     /// <summary>press, hold, release: where to move the cursor first; none = where it is.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public XyDto? At { get; set; }
@@ -157,6 +161,7 @@ public static class ScriptMapper
                 dto.Input = input.Input is { Key: not VirtualKey.None } chord
                     ? new ChordDto(KeyCodes.ToCode(chord.Key), KeyCodes.FormatModifiers(chord.Modifiers))
                     : null;
+                dto.Press = block is PressBlock && dto.Input is not null ? input.Input!.PressMs : null;
                 dto.At = input.At is { } at ? new XyDto(at.X, at.Y) : null;
                 break;
 
@@ -210,7 +215,7 @@ public static class ScriptMapper
         where T : InputBlock
     {
         block.Input = dto.Input is { } chord && KeyCodes.TryGetVirtualKey(chord.Key, out var key)
-            ? new InputChord(key, KeyCodes.ParseModifiers(chord.Mods))
+            ? new InputChord(key, KeyCodes.ParseModifiers(chord.Mods)) { PressMs = dto.Press ?? InputChord.DefaultPressMs }
             : null;
         block.At = dto.At is { } at ? new ScreenPoint(at.X, at.Y) : null;
         return block;

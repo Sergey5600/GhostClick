@@ -108,34 +108,19 @@ public static class ProfileValidator
     }
 
     /// <summary>
-    /// The hold time is used by a script's «Нажать» too; the rest of the action only by a
+    /// The press spread is used by a script's «Нажать» too; the rest of the action only by a
     /// <paramref name="clicker"/>.
     /// </summary>
     private static void ValidateAction(ActionSettings action, List<ValidationError> errors, bool clicker)
     {
-        if (action.HoldDurationMs < 0)
+        if (action.PressSpreadPercent is < 0 or > 100)
         {
-            errors.Add(new ValidationError("Action.HoldDurationMs", "Hold duration must not be negative."));
+            errors.Add(new ValidationError("Action.PressSpreadPercent", "Press spread must be between 0 and 100 percent."));
         }
 
         if (clicker)
         {
             ValidateInputs(action, errors);
-        }
-
-        if (action.RandomizeHoldDuration)
-        {
-            if (action.MinHoldDurationMs < 0)
-            {
-                errors.Add(new ValidationError("Action.MinHoldDurationMs", "Minimum hold must not be negative."));
-            }
-
-            if (action.MaxHoldDurationMs < action.MinHoldDurationMs)
-            {
-                errors.Add(new ValidationError(
-                    "Action.MaxHoldDurationMs",
-                    $"Maximum hold ({action.MaxHoldDurationMs} ms) must be >= minimum hold ({action.MinHoldDurationMs} ms)."));
-            }
         }
     }
 
@@ -154,9 +139,21 @@ public static class ProfileValidator
 
         for (int i = 0; i < action.Inputs.Count; i++)
         {
-            if (action.Inputs[i] is null || action.Inputs[i].Key == VirtualKey.None)
+            var input = action.Inputs[i];
+            if (input is null || input.Key == VirtualKey.None)
             {
                 errors.Add(new ValidationError($"Action.Inputs[{i}]", "Every input needs a key or mouse button."));
+                continue;
+            }
+
+            if (input.PressMs < 0)
+            {
+                errors.Add(new ValidationError($"Action.Inputs[{i}].PressMs", "Press duration must not be negative."));
+            }
+
+            if (input.Mode == PressMode.Hold && input.Hold == HoldMode.Timed && input.HoldMs <= 0)
+            {
+                errors.Add(new ValidationError($"Action.Inputs[{i}].HoldMs", "A timed hold must last at least 1 ms."));
             }
         }
     }

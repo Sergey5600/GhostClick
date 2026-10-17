@@ -189,9 +189,11 @@ public class ScriptBridgeTests
         Assert.Equal("r", block.GetProperty("loops")[0].GetProperty("id").GetString());
         Assert.Equal(JsonValueKind.Null, block.GetProperty("loops")[0].GetProperty("count").ValueKind);
 
+        // The engine is idle a moment before its Stopped event posts the log line and the
+        // cleared block, so wait for those rather than for the state.
         f.Send(new { type = "panic" });
-        f.PumpUntil(() => f.Host.Engine.State == EngineState.Idle);
-        Assert.Contains(f.Logs(), l => l.StartsWith("Аварийная остановка", StringComparison.Ordinal));
+        f.PumpUntil(() => f.Logs().Any(l => l.StartsWith("Аварийная остановка", StringComparison.Ordinal)));
+        Assert.Equal(EngineState.Idle, f.Host.Engine.State);
         Assert.Equal(JsonValueKind.Null, f.Last("block").GetProperty("block").ValueKind);
     }
 
