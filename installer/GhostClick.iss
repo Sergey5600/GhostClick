@@ -35,6 +35,9 @@
 #endif
 #define WebView2SetupName ExtractFileName(WebView2Setup)
 
+; WizardImageSizes, WizardSmallImageSizes and the defaults (assets/build-installer-art.sh).
+#include "art\sizes.iss"
+
 [Setup]
 ; Never change the AppId: it is how an upgrade finds the installed copy.
 AppId={{6E27B7AA-6BAA-4941-93BB-7998B449A0AA}
@@ -66,8 +69,12 @@ WizardStyle=modern
 DisableWelcomePage=no
 DisableDirPage=auto
 ShowLanguageDialog=no
-WizardImageFile=art\WizardImage-100.bmp,art\WizardImage-125.bmp,art\WizardImage-150.bmp,art\WizardImage-175.bmp,art\WizardImage-200.bmp
-WizardSmallImageFile=art\WizardSmallImage-100.bmp,art\WizardSmallImage-125.bmp,art\WizardSmallImage-150.bmp,art\WizardSmallImage-175.bmp,art\WizardSmallImage-200.bmp
+; The pictures are drawn for the wizard's exact size (see [Code]); a wizard the user could
+; resize would have them resampled again.
+WizardResizable=no
+; What Setup shows if [Code] cannot do better; the other sizes are in [Files].
+WizardImageFile=art\WizardImage-{#DefaultWizardImage}.bmp
+WizardSmallImageFile=art\WizardSmallImage-{#DefaultWizardSmallImage}.bmp
 SetupIconFile=..\assets\AppIcon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}
@@ -107,9 +114,12 @@ english.WelcomeLabel2=This will install [name/ver] on your computer.%n%nGhostCli
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Unpacked only when WebView2 is missing (see [Code]).
+; Unpacked only while Setup runs (see [Code]). Listed first: with solid compression, getting
+; a file out means unpacking everything stored before it.
+Source: "art\WizardImage-*.bmp"; Flags: dontcopy
+Source: "art\WizardSmallImage-*.bmp"; Flags: dontcopy
 Source: "{#WebView2Setup}"; Flags: dontcopy
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "{#AppName}"
@@ -151,6 +161,109 @@ begin
   if not Exec(ExpandConstant('{tmp}\{#WebView2SetupName}'), '/silent /install', '', SW_HIDE,
               ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
     SuppressibleMsgBox(CustomMessage('WebView2Failed'), mbError, MB_OK, IDOK);
+end;
+
+{ Setup picks a wizard picture before it enlarges the modern wizard to 120 % and then
+  resamples it to its box, which blurs it; the header picture's box is 55x58, not square,
+  so a square icon came out squashed. art\ has each picture drawn for the exact box of
+  each display scale (installer/wizard-sizes.ps1), so once the wizard has its final size,
+  show the one that matches. }
+
+{ From Sizes ("WxH WxH ...", smallest first): the smallest that covers the box, or with
+  Inside, the largest that fits inside it. }
+function PickPictureSize(const Sizes: String; const BoxWidth, BoxHeight: Integer;
+  const Inside: Boolean; var Width, Height: Integer): Boolean;
+var
+  Rest, Size: String;
+  P, W, H: Integer;
+begin
+  Result := False;
+  Rest := Trim(Sizes) + ' ';
+  while Rest <> '' do begin
+    P := Pos(' ', Rest);
+    Size := Copy(Rest, 1, P - 1);
+    Delete(Rest, 1, P);
+    P := Pos('x', Size);
+    W := StrToIntDef(Copy(Size, 1, P - 1), 0);
+    H := StrToIntDef(Copy(Size, P + 1, Length(Size)), 0);
+    if Inside then begin
+      if (W <= BoxWidth) and (H <= BoxHeight) then begin
+        Width := W;
+        Height := H;
+        Result := True;
+      end;
+    end else if (W >= BoxWidth) and (H >= BoxHeight) then begin
+      Width := W;
+      Height := H;
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
+function BitBlt(DestDC: LongWord; X, Y, Width, Height: Integer; SrcDC: LongWord;
+  XSrc, YSrc: Integer; Rop: LongWord): BOOL; external 'BitBlt@gdi32.dll stdcall';
+
+{ Shows the best picture for Image's box pixel for pixel. The header icon is centred on the
+  white header. A side picture drawn for a slightly larger box loses a few pixels of
+  background at the edges; one much larger (an unusual display scale) is left to Setup to
+  scale down. }
+procedure ShowWizardPicture(const Image: TBitmapImage; const Prefix, Sizes: String;
+  const Inside: Boolean);
+var
+  W, H, BoxWidth, BoxHeight: Integer;
+  Name, How: String;
+  Picture, Fitted: TBitmap;
+begin
+  BoxWidth := Image.Width;
+  BoxHeight := Image.Height;
+  if not PickPictureSize(Sizes, BoxWidth, BoxHeight, Inside, W, H) then begin
+    Log(Format('Wizard picture %s: no picture for a %dx%d box', [Prefix, BoxWidth, BoxHeight]));
+    Exit;
+  end;
+
+  Name := Format('%s-%dx%d.bmp', [Prefix, W, H]);
+  ExtractTemporaryFile(Name);
+  Picture := TBitmap.Create;
+  Fitted := TBitmap.Create;
+  try
+    Picture.LoadFromFile(ExpandConstant('{tmp}\') + Name);
+    if Inside or ((W = BoxWidth) and (H = BoxHeight)) then begin
+      Image.Stretch := False;
+      Image.Center := True;
+      Image.Bitmap := Picture;
+      How := 'shown pixel for pixel';
+    end else if (W - BoxWidth > BoxWidth div 16) or (H - BoxHeight > BoxHeight div 16) then begin
+      Image.Bitmap := Picture;
+      How := 'scaled by Setup';
+    end else begin
+      Fitted.Width := BoxWidth;
+      Fitted.Height := BoxHeight;
+      BitBlt(Fitted.Canvas.Handle, 0, 0, BoxWidth, BoxHeight, Picture.Canvas.Handle,
+        (W - BoxWidth) div 2, (H - BoxHeight) div 2, $00CC0020 { SRCCOPY });
+      Image.Stretch := False;
+      Image.Bitmap := Fitted;
+      How := 'cropped to fit, shown pixel for pixel';
+    end;
+    Log(Format('Wizard picture %s: %dx%d box, %s %s', [Prefix, BoxWidth, BoxHeight, Name, How]));
+  finally
+    Fitted.Free;
+    Picture.Free;
+  end;
+end;
+
+var
+  WizardPicturesShown: Boolean;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  { The welcome page comes first and the wizard has its final size by then. }
+  if (CurPageID = wpWelcome) and not WizardSilent and not WizardPicturesShown then begin
+    WizardPicturesShown := True;
+    ShowWizardPicture(WizardForm.WizardBitmapImage, 'WizardImage', '{#WizardImageSizes}', False);
+    ShowWizardPicture(WizardForm.WizardBitmapImage2, 'WizardImage', '{#WizardImageSizes}', False);
+    ShowWizardPicture(WizardForm.WizardSmallBitmapImage, 'WizardSmallImage', '{#WizardSmallImageSizes}', True);
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

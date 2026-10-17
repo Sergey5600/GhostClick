@@ -158,6 +158,47 @@ jobs:
           $setup = Get-Item "publish/installer/GhostClick-Setup-$env:VERSION.exe"
           Write-Host ("{0}: {1:N1} MB" -f $setup.Name, ($setup.Length / 1MB))
 
+      # The wizard's pictures must be shown at exactly their box size, or Setup resamples
+      # (blurs) them. Starts the setup's wizard for real, reads what its [Code] logged about
+      # the boxes and pictures, and checks that against installer/wizard-sizes.ps1, which
+      # also checks that installer/art has a picture for every display scale.
+      - name: Check the wizard pictures
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $setup = (Resolve-Path "publish/installer/GhostClick-Setup-$env:VERSION.exe").Path
+          $log = Join-Path $PWD 'wizard.log'
+          Start-Process $setup -ArgumentList "/LOG=`"$log`""
+
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Get-Date) -lt $deadline -and
+                 -not ((Test-Path $log) -and (Select-String -Path $log -Pattern 'Wizard picture WizardSmallImage' -Quiet))) {
+            Start-Sleep -Seconds 1
+          }
+          Start-Sleep -Seconds 3
+
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $shot = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          $graphics = [System.Drawing.Graphics]::FromImage($shot)
+          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $shot.Save("$PWD/wizard.png")
+
+          # Setup runs as a .tmp copy of itself; nothing is installed yet on the welcome page.
+          Get-CimInstance Win32_Process | Where-Object Name -like 'GhostClick-Setup*' |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+          $lines = @(Select-String -Path $log -Pattern 'Wizard picture' | ForEach-Object { $_.Line })
+          $lines | Write-Host
+          if ($lines.Count -lt 3) { throw 'The wizard did not log its pictures; see the wizard-screenshot artifact.' }
+          if ($lines | Where-Object { $_ -notmatch 'pixel for pixel' }) { throw 'A wizard picture is resampled at this display scale.' }
+
+          $rows = & ./installer/wizard-sizes.ps1 -ArtDir installer/art
+          $dpi = [int]([System.Drawing.Graphics]::FromHwnd([IntPtr]::Zero).DpiX)
+          $row = $rows | Where-Object Dpi -eq $dpi
+          Write-Host "Runner: $dpi DPI, expected side $($row.Side), header $($row.Header)"
+          if (-not ($lines -match "WizardImage: $($row.Side) box")) { throw "The side picture's box is not $($row.Side): installer/wizard-sizes.ps1 no longer matches Setup." }
+          if (-not ($lines -match "WizardSmallImage: $($row.Header) box")) { throw "The header picture's box is not $($row.Header): installer/wizard-sizes.ps1 no longer matches Setup." }
+
       - name: Upload the installer
         uses: actions/upload-artifact@v6
         with:
@@ -290,6 +331,16 @@ jobs:
         with:
           name: smoke-test-screenshot
           path: smoke-test.png
+          if-no-files-found: ignore
+
+      - name: Upload wizard screenshot
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: wizard-screenshot
+          path: |
+            wizard.png
+            wizard.log
           if-no-files-found: ignore
 
       - name: Upload test results and install log

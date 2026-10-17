@@ -1,50 +1,80 @@
 #!/usr/bin/env bash
-# Renders the installer wizard pictures into installer/art.
+# Renders the setup wizard's pictures into installer/art.
 #
-# Inno Setup takes one bitmap per display scale and picks the one that fits.
-#   WizardImage-*.bmp       the tall picture on the welcome and finish pages. Its source is
-#                           InstallerWizard.png, the Figma design "WizardImage — Midnight
-#                           Minimal" exported at 328x628, the 200 % size: 200 % is that picture
-#                           as it is, the smaller scales are downscaled from it.
-#   WizardSmallImage-*.bmp  the app icon in the top corner of the other pages, rendered
-#                           straight from AppIcon.svg at each size rather than stretched.
+# Inno Setup scales whatever bitmap it is given to the box the wizard has for it, and that
+# resampling blurs it (and squashes the header icon, whose box is 55x58, not square). So
+# each picture is drawn here at exactly the box size of each display scale, and the [Code]
+# in installer/GhostClick.iss shows the one that matches the real box pixel for pixel.
+#
+#   WizardImage-WxH.bmp       the tall picture on the welcome and finish pages, drawn from
+#                             InstallerWizard.svg: the Figma design "WizardImage - Midnight
+#                             Minimal", exported as SVG. It is scaled to the box height; the
+#                             box is a little narrower or wider than the design at some
+#                             scales, which only trims or extends the background at the sides.
+#   WizardSmallImage-WxH.bmp  the app icon in the top corner of the other pages, drawn from
+#                             AppIcon.svg as big as the box allows, centred on white.
+#   sizes.iss                 the lists below, for GhostClick.iss.
+#
+# The sizes are what installer/wizard-sizes.ps1 prints on Windows (CI runs it and fails if
+# a size is missing here), for the display scales 100, 125, 150, 175, 200, 225, 250, 300 %.
 #
 # Needs: librsvg2-bin (rsvg-convert) and ImageMagick (convert, identify).
 set -euo pipefail
 
+side_sizes=(202x386 235x475 302x564 335x683 403x742 437x861 504x980 605x1158)
+header_sizes=(55x58 64x71 83x85 92x103 110x112 119x129 138x147 165x174)
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 out="$here/../installer/art"
 mkdir -p "$out"
-
-wizard="$here/InstallerWizard.png"
-if [ "$(identify -format '%wx%h' "$wizard")" != 328x628 ]; then
-    echo "$wizard must be 328x628 (the 200 % size); export it from Figma at that size" >&2
-    exit 1
-fi
+rm -f "$out"/WizardImage-*.bmp "$out"/WizardSmallImage-*.bmp
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# Display scale -> size. 164x314 and 55x55 are Inno Setup's sizes at 100 %.
-for scale in 100 125 150 175 200; do
-    w=$(( 164 * scale / 100 )); h=$(( 314 * scale / 100 )); s=$(( 55 * scale / 100 ))
-
-    if [ "$scale" = 200 ]; then
-        cp "$wizard" "$work/large.png"
-    else
-        # Two-lobe Lanczos, in sRGB: these come closest to what Figma itself draws at each
-        # size. Three lobes leave a dark ring round the white ghost, and in linear light the
-        # ghost and the lettering turn out visibly heavier.
-        convert "$wizard" -filter Lanczos2 -resize "${w}x${h}!" "$work/large.png"
-    fi
-    # -density 0 drops the 25 dpi that Figma writes into its PNG; Setup goes by pixels only.
-    convert "$work/large.png" -background '#16181F' -alpha remove -alpha off -density 0 \
-        -type TrueColor "BMP3:$out/WizardImage-$scale.bmp"
-
-    # The small picture sits on the white page header, so the icon is flattened onto white.
-    rsvg-convert -w "$s" -h "$s" -o "$work/small.png" "$here/AppIcon.svg"
-    convert "$work/small.png" -background white -alpha remove -alpha off -type TrueColor \
-        "BMP3:$out/WizardSmallImage-$scale.bmp"
+# The design is 328x628. Scaled to height H, a box of width W shows a slice of the design
+# W*628/H wide, centred; the background rectangle is made wide enough to fill any slice.
+for size in "${side_sizes[@]}"; do
+    w=${size%x*}; h=${size#*x}
+    view_w=$(awk -v w="$w" -v h="$h" 'BEGIN { printf "%.4f", w * 628 / h }')
+    view_x=$(awk -v v="$view_w" 'BEGIN { printf "%.4f", (328 - v) / 2 }')
+    sed -e "s|width=\"328\" height=\"628\" viewBox=\"0 0 328 628\"|width=\"$w\" height=\"$h\" viewBox=\"$view_x 0 $view_w 628\"|" \
+        -e 's|<rect width="328" height="628"|<rect x="-328" width="984" height="628"|' \
+        "$here/InstallerWizard.svg" > "$work/side.svg"
+    rsvg-convert -w "$w" -h "$h" -o "$work/side.png" "$work/side.svg"
+    convert "$work/side.png" -alpha off -density 0 -type TrueColor "BMP3:$out/WizardImage-$size.bmp"
 done
 
-ls -la "$out"
+# The header icon sits on the white page header. Like build-icon.sh, it puts the plate's
+# edges on whole pixels: the room AppIcon.svg leaves around the plate for its shadow is
+# rounded down to whole pixels and the plate fills the rest.
+for expected in 'viewBox="40 16 1072 1072"' '<rect x="64" y="40" width="1024" height="1024"'; do
+    if ! grep -qF "$expected" "$here/AppIcon.svg"; then
+        echo "AppIcon.svg no longer has $expected; update the plate geometry in $0" >&2
+        exit 1
+    fi
+done
+for size in "${header_sizes[@]}"; do
+    w=${size%x*}; h=${size#*x}
+    icon=$(( w < h ? w : h ))
+    view_box=$(awk -v s="$icon" 'BEGIN {
+        x = 64; y = 40; p = 1024; c = 1072          # plate and canvas in AppIcon.svg
+        margin = int(s * (c - p) / 2 / c)
+        v = p * s / (s - 2 * margin)
+        printf "%.4f %.4f %.4f %.4f", x + p / 2 - v / 2, y + p / 2 - v / 2, v, v
+    }')
+    sed "s|viewBox=\"40 16 1072 1072\"|viewBox=\"$view_box\"|" "$here/AppIcon.svg" > "$work/icon.svg"
+    rsvg-convert -w "$icon" -h "$icon" -o "$work/icon.png" "$work/icon.svg"
+    convert -size "${w}x${h}" xc:white "$work/icon.png" -gravity center -composite \
+        -alpha off -density 0 -type TrueColor "BMP3:$out/WizardSmallImage-$size.bmp"
+done
+
+cat > "$out/sizes.iss" <<EOF
+; Generated by assets/build-installer-art.sh: the pictures in this folder, smallest first.
+#define WizardImageSizes "${side_sizes[*]}"
+#define WizardSmallImageSizes "${header_sizes[*]}"
+#define DefaultWizardImage "${side_sizes[0]}"
+#define DefaultWizardSmallImage "${header_sizes[0]}"
+EOF
+
+identify "$out"/*.bmp
