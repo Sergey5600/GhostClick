@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using ClickerEngine.Core;
+using ClickerEngine.Core.Engine;
 using ClickerEngine.Core.Hotkeys;
 using ClickerEngine.Core.Input;
 using ClickerEngine.Core.Profiles;
@@ -77,7 +78,7 @@ public sealed class MainWindow : Window, IUiChannel
         var windowProbe = new DryRunAwareWindowProbe(new Win32WindowProbe(), _injector);
 
         _host = new ClickerHost(_injector, new JsonProfileStore(), hotkeys, screen: screen, windowProbe: windowProbe);
-        _bridge = new UiBridge(_host, _injector, this);
+        _bridge = new UiBridge(_host, _injector, this, settings: new JsonUiSettingsStore());
 
         _ticker = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(250) };
         _ticker.Tick += (_, _) => _bridge.Tick();
@@ -85,6 +86,10 @@ public sealed class MainWindow : Window, IUiChannel
         SourceInitialized += (_, _) => UseDarkTitleBar();
         Loaded += OnLoaded;
         Closed += OnClosed;
+
+        // A crash must not leave keys the clicker holds down pressed for the whole system:
+        // stopping the engine releases them before the process goes.
+        AppDomain.CurrentDomain.UnhandledException += (_, _) => _host.Engine.Stop(StopReason.Error);
     }
 
     // ------------------------------------------------------------------ IUiChannel
