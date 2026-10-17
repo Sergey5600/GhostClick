@@ -49,7 +49,9 @@ public static class ProfileSerializer
                 throw new ProfileFormatException("The profile document is not a JSON object.");
             }
 
+            int version = Read(document["version"], 1);
             MigrateSingleAction(document);
+            MigratePressLength(document, version);
 
             return document.Deserialize<ClickerProfile>(Options)
                 ?? throw new ProfileFormatException("The profile document was empty.");
@@ -84,6 +86,38 @@ public static class ProfileSerializer
         action.Remove("button");
         action.Remove("key");
         action.Remove("keyModifiers");
+
+        if (Read(document["version"], 1) < ClickerProfile.CurrentVersion)
+        {
+            document["version"] = ClickerProfile.CurrentVersion;
+        }
+    }
+
+    /// <summary>
+    /// Schema 2 kept one press length for the whole action (<c>holdDurationMs</c>, or a random
+    /// one between <c>minHoldDurationMs</c> and <c>maxHoldDurationMs</c>). Schema 3 gives every
+    /// input its own <c>pressMs</c> and randomizes around it; an old action's press length moves
+    /// onto each of its inputs, and an action that released at once gets the new default.
+    /// </summary>
+    private static void MigratePressLength(JsonObject document, int version)
+    {
+        if (version >= 3 || document["action"] is not JsonObject action)
+        {
+            return;
+        }
+
+        int hold = Read(action["holdDurationMs"], 0);
+        if (hold > 0 && action["inputs"] is JsonArray inputs)
+        {
+            foreach (var input in inputs.OfType<JsonObject>())
+            {
+                input["pressMs"] = hold;
+            }
+        }
+
+        action.Remove("holdDurationMs");
+        action.Remove("minHoldDurationMs");
+        action.Remove("maxHoldDurationMs");
 
         if (Read(document["version"], 1) < ClickerProfile.CurrentVersion)
         {

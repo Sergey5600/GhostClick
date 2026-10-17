@@ -94,7 +94,7 @@
                                 <CheckBox x:Name="ActionShiftBox" Content="Shift" Margin="0,0,10,6" />
                             </StackPanel>
 
-                            <Label Content="Hold duration (ms)" />
+                            <Label Content="Press duration (ms)" />
                             <TextBox x:Name="HoldDurationBox" />
 
                             <Label Content="Double click gap (ms)" />

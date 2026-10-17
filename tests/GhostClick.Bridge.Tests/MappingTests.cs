@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClickerEngine.Core.Configuration;
 using ClickerEngine.Core.Profiles;
 using Xunit;
@@ -98,6 +99,17 @@ public class MappingTests
     }
 
     [Fact]
+    public void DescribeNamesTheMouseButtonsInEnglishToo()
+    {
+        Assert.Equal("LMB", KeyCodes.Describe(VirtualKey.LeftButton, KeyModifiers.None, "en"));
+        Assert.Equal("Ctrl + RMB", KeyCodes.Describe(VirtualKey.RightButton, KeyModifiers.Control, "en"));
+        Assert.Equal("MMB", KeyCodes.Label(VirtualKey.MiddleButton, "en"));
+        Assert.Equal("X1", KeyCodes.Label(VirtualKey.XButton1, "en"));
+        Assert.Equal("Shift + E", KeyCodes.Describe(VirtualKey.E, KeyModifiers.Shift, "en"));
+        Assert.Equal("ПКМ", KeyCodes.Describe(VirtualKey.RightButton, KeyModifiers.None, "ru"));
+    }
+
+    [Fact]
     public void Dto_ReflectsTheProfile()
     {
         var profile = ClickerProfile.CreateDefault();
@@ -116,6 +128,13 @@ public class MappingTests
         Assert.Equal("F9", dto.Bind.Point!.Key);
         Assert.Equal(new[] { "Mouse1", "KeyE" }, dto.Actions.Select(a => a.Key));
         Assert.Equal(new[] { "Ctrl" }, dto.Actions[1].Mods);
+        Assert.All(dto.Actions, a =>
+        {
+            Assert.Equal("click", a.Mode);
+            Assert.Equal(30, a.Press);
+            Assert.Equal("run", a.Hold);
+            Assert.Equal(500, a.HoldMs);
+        });
         Assert.Equal("points", dto.Target);
         Assert.Equal("door", Assert.Single(dto.Points).Label);
         Assert.False(dto.Points[0].Enabled);
@@ -127,7 +146,14 @@ public class MappingTests
     {
         var profile = UiDefaults.CreateProfile("Farm");
         profile.Mode = ClickMode.Hold;
-        profile.Action.Inputs = [InputChord.Mouse(MouseButton.XButton2, KeyModifiers.Alt), new InputChord(VirtualKey.MediaPlayPause)];
+        profile.Action.Inputs =
+        [
+            InputChord.Mouse(MouseButton.XButton2, KeyModifiers.Alt),
+            new InputChord(VirtualKey.MediaPlayPause) { PressMs = 70 },
+            new InputChord(VirtualKey.W) { Mode = PressMode.Hold },
+            new InputChord(VirtualKey.A) { Mode = PressMode.Hold, Hold = HoldMode.Timed, HoldMs = 900 },
+            new InputChord(VirtualKey.D) { Mode = PressMode.Click, Hold = HoldMode.Timed, HoldMs = 700 },
+        ];
         profile.Action.ClickType = ClickType.Double;
         profile.Target.Mode = TargetMode.Directional;
         profile.Target.Route = [new ClickPoint(1, 2, 3, "a"), new ClickPoint(4, 5) { Enabled = false }];
@@ -158,7 +184,13 @@ public class MappingTests
                 Panic = new ChordDto("Escape", "Ctrl", "Shift"),
                 Point = new ChordDto("KeyP"),
             },
-            Actions = [new ChordDto("Mouse2"), new ChordDto("Space", "Alt")],
+            Actions =
+            [
+                new ActionDto("Mouse2"),
+                new ActionDto("Space", "Alt") { Press = 80 },
+                new ActionDto("KeyW", "Shift") { Mode = "hold" },
+                new ActionDto("KeyA") { Mode = "hold", Hold = "time", HoldMs = 1500 },
+            ],
             Points = [new PointDto { X = 5, Y = 6 }],
             Mode = "hold",
             Target = "points",
@@ -180,7 +212,13 @@ public class MappingTests
         Assert.Equal(new HotkeyBinding(VirtualKey.Escape, KeyModifiers.Control | KeyModifiers.Shift), profile.Hotkeys.EmergencyStop);
         Assert.Equal(VirtualKey.P, profile.Hotkeys.RecordPoint.Key);
         Assert.Equal(
-            new[] { InputChord.Mouse(MouseButton.Right), new InputChord(VirtualKey.Space, KeyModifiers.Alt) },
+            new[]
+            {
+                InputChord.Mouse(MouseButton.Right),
+                new InputChord(VirtualKey.Space, KeyModifiers.Alt) { PressMs = 80 },
+                new InputChord(VirtualKey.W, KeyModifiers.Shift) { Mode = PressMode.Hold, Hold = HoldMode.WhileRunning },
+                new InputChord(VirtualKey.A) { Mode = PressMode.Hold, Hold = HoldMode.Timed, HoldMs = 1500 },
+            },
             profile.Action.Inputs);
         Assert.Equal(new ScreenPoint(5, 6), Assert.Single(profile.Target.Route).ToScreenPoint());
         Assert.Equal(ClickMode.Hold, profile.Mode);
@@ -270,7 +308,7 @@ public class MappingTests
         dto.Mode = "sideways";
         dto.Target = "moon";
         dto.Bind.Toggle = new ChordDto("NotAKey");
-        dto.Actions = [new ChordDto("NotAKey"), new ChordDto("KeyE")];
+        dto.Actions = [new ActionDto("NotAKey"), new ActionDto("KeyE") { Mode = "sideways", Hold = "forever" }];
 
         ProfileMapper.Apply(dto, profile);
 
@@ -278,6 +316,25 @@ public class MappingTests
         Assert.Equal(TargetMode.CurrentCursor, profile.Target.Mode);
         Assert.Equal(VirtualKey.F6, profile.Hotkeys.StartStop.Key);
         Assert.Equal(new InputChord(VirtualKey.E), Assert.Single(profile.Action.Inputs));
+    }
+
+    [Fact]
+    public void ActionsFromAPageWithoutPressSettingsGetTheDefaults()
+    {
+        // What a page from before «Как нажимать» sends: a key and its modifiers, nothing else.
+        var dto = JsonSerializer.Deserialize<ProfileDto>(
+            """{ "actions": [ { "mods": ["Ctrl"], "key": "KeyE" } ] }""",
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        var profile = ClickerProfile.CreateDefault();
+
+        ProfileMapper.Apply(dto, profile);
+
+        var input = Assert.Single(profile.Action.Inputs);
+        Assert.Equal(new InputChord(VirtualKey.E, KeyModifiers.Control), input);
+        Assert.Equal(PressMode.Click, input.Mode);
+        Assert.Equal(30, input.PressMs);
+        Assert.Equal(HoldMode.WhileRunning, input.Hold);
+        Assert.Equal(500, input.HoldMs);
     }
 
     [Fact]

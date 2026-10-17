@@ -83,43 +83,39 @@ public static class ProfileValidator
 
     private static void ValidateAction(ActionSettings action, List<ValidationError> errors)
     {
-        if (action.HoldDurationMs < 0)
-        {
-            errors.Add(new ValidationError("Action.HoldDurationMs", "Hold duration must not be negative."));
-        }
-
         if (action.DoubleClickGapMs < 0)
         {
             errors.Add(new ValidationError("Action.DoubleClickGapMs", "Double click gap must not be negative."));
         }
 
+        if (action.PressSpreadPercent is < 0 or > 100)
+        {
+            errors.Add(new ValidationError("Action.PressSpreadPercent", "Press spread must be between 0 and 100 percent."));
+        }
+
         if (action.Inputs is null || action.Inputs.Count == 0)
         {
             errors.Add(new ValidationError("Action.Inputs", "Choose at least one key or mouse button to press."));
-        }
-        else
-        {
-            for (int i = 0; i < action.Inputs.Count; i++)
-            {
-                if (action.Inputs[i] is null || action.Inputs[i].Key == VirtualKey.None)
-                {
-                    errors.Add(new ValidationError($"Action.Inputs[{i}]", "Every input needs a key or mouse button."));
-                }
-            }
+            return;
         }
 
-        if (action.RandomizeHoldDuration)
+        for (int i = 0; i < action.Inputs.Count; i++)
         {
-            if (action.MinHoldDurationMs < 0)
+            var input = action.Inputs[i];
+            if (input is null || input.Key == VirtualKey.None)
             {
-                errors.Add(new ValidationError("Action.MinHoldDurationMs", "Minimum hold must not be negative."));
+                errors.Add(new ValidationError($"Action.Inputs[{i}]", "Every input needs a key or mouse button."));
+                continue;
             }
 
-            if (action.MaxHoldDurationMs < action.MinHoldDurationMs)
+            if (input.PressMs < 0)
             {
-                errors.Add(new ValidationError(
-                    "Action.MaxHoldDurationMs",
-                    $"Maximum hold ({action.MaxHoldDurationMs} ms) must be >= minimum hold ({action.MinHoldDurationMs} ms)."));
+                errors.Add(new ValidationError($"Action.Inputs[{i}].PressMs", "Press duration must not be negative."));
+            }
+
+            if (input.Mode == PressMode.Hold && input.Hold == HoldMode.Timed && input.HoldMs <= 0)
+            {
+                errors.Add(new ValidationError($"Action.Inputs[{i}].HoldMs", "A timed hold must last at least 1 ms."));
             }
         }
     }

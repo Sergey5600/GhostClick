@@ -22,6 +22,12 @@ public enum EngineStepKind
 
     /// <summary>Release <see cref="EngineStep.Key"/>.</summary>
     KeyUp,
+
+    /// <summary>
+    /// An action tick with nothing to press, because every input is held for the whole run.
+    /// It still completes an action, so a fixed count still ends the run.
+    /// </summary>
+    Tick,
 }
 
 /// <summary>
@@ -91,6 +97,9 @@ public readonly record struct EngineStep
             CompletesAction = completesAction && !isModifier,
         };
 
+    public static EngineStep Tick() =>
+        new(EngineStepKind.Tick) { CompletesAction = true };
+
     public override string ToString() => Kind switch
     {
         EngineStepKind.Wait => $"Wait {Delay.TotalMilliseconds:0.##} ms",
@@ -98,6 +107,7 @@ public readonly record struct EngineStep
         EngineStepKind.MouseDown => $"MouseDown {Button}",
         EngineStepKind.MouseUp => $"MouseUp {Button}",
         EngineStepKind.KeyDown => $"KeyDown {Key}",
+        EngineStepKind.Tick => "Tick",
         _ => $"KeyUp {Key}",
     };
 }

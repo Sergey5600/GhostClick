@@ -21,6 +21,14 @@ public static class KeyCodes
     private static readonly Dictionary<VirtualKey, string> ByKey = new();
     private static readonly Dictionary<VirtualKey, string> Labels = new();
 
+    /// <summary>Labels that differ in English; every other key reads the same in both languages.</summary>
+    private static readonly Dictionary<VirtualKey, string> EnglishLabels = new()
+    {
+        [VirtualKey.LeftButton] = "LMB",
+        [VirtualKey.RightButton] = "RMB",
+        [VirtualKey.MiddleButton] = "MMB",
+    };
+
     static KeyCodes()
     {
         Add("Mouse1", VirtualKey.LeftButton, "ЛКМ");
@@ -138,6 +146,10 @@ public static class KeyCodes
     public static string Label(VirtualKey key) =>
         Labels.TryGetValue(key, out var label) ? label : ToCode(key);
 
+    /// <summary>The label in an interface language: <c>LMB</c> rather than <c>ЛКМ</c> in English.</summary>
+    public static string Label(VirtualKey key, string? language) =>
+        language == UiText.English.Language && EnglishLabels.TryGetValue(key, out var label) ? label : Label(key);
+
     /// <summary>Parses modifier names (<c>Ctrl</c>, <c>Shift</c>, <c>Alt</c>, <c>Win</c>); unknown names are ignored.</summary>
     public static KeyModifiers ParseModifiers(IEnumerable<string>? names)
     {
@@ -187,6 +199,10 @@ public static class KeyCodes
     /// <summary>A chord as the page writes it, e.g. <c>Ctrl + F12</c>.</summary>
     public static string Describe(VirtualKey key, KeyModifiers modifiers) =>
         string.Join(" + ", FormatModifiers(modifiers).Append(Label(key)));
+
+    /// <summary>A chord as the page writes it in an interface language.</summary>
+    public static string Describe(VirtualKey key, KeyModifiers modifiers, string? language) =>
+        string.Join(" + ", FormatModifiers(modifiers).Append(Label(key, language)));
 
     private static void Add(string code, VirtualKey key, string label)
     {

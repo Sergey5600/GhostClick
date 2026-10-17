@@ -496,6 +496,197 @@ public class UiBridgeTests
         Assert.Equal(before, f.Channel.Messages.Count);
     }
 
+    // ------------------------------------------------------------------ language
+
+    [Fact]
+    public void Ready_TellsThePageTheSavedLanguage()
+    {
+        using var russian = new Fixture();
+        russian.Ready();
+        Assert.Equal("ru", russian.Last("init").GetProperty("lang").GetString());
+
+        var settings = new InMemoryUiSettingsStore();
+        settings.Save(new UiSettings { Language = "en" });
+
+        using var english = new Fixture(settings: settings);
+        english.Ready();
+
+        Assert.Equal("en", english.Last("init").GetProperty("lang").GetString());
+        Assert.Equal("Profile “Default” loaded", english.Logs()[0]);
+    }
+
+    [Fact]
+    public void SetLanguage_IsRememberedAndTheLogFollowsIt()
+    {
+        using var f = new Fixture();
+        f.Ready();
+
+        f.Send(new { type = "setLanguage", lang = "en" });
+
+        Assert.Equal("en", f.Settings.Load().Language);
+        Assert.Equal("en", f.Bridge.Language);
+
+        // Lines already written stay as they were.
+        Assert.Equal("Профиль «Default» загружен", f.Logs()[0]);
+
+        f.SetProfile(data => data["delay"] = 250);
+        f.Send(new { type = "saveProfile" });
+        Assert.Equal("Profile “Default” saved", f.Last("toast").GetProperty("message").GetString());
+
+        f.Send(new { type = "setLanguage", lang = "ru" });
+        Assert.Equal("ru", f.Settings.Load().Language);
+    }
+
+    [Theory]
+    [InlineData("de")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void SetLanguage_IgnoresLanguagesTheInterfaceDoesNotSpeak(string? lang)
+    {
+        using var f = new Fixture();
+        f.Ready();
+
+        f.Send(new { type = "setLanguage", lang });
+
+        Assert.Equal("ru", f.Bridge.Language);
+        Assert.Equal("ru", f.Settings.Load().Language);
+    }
+
+    [Fact]
+    public void English_RunsProfilesAndErrorsAreReportedInEnglish()
+    {
+        using var f = new Fixture();
+        f.Ready();
+        f.Send(new { type = "setLanguage", lang = "en" });
+        f.SetProfile(data =>
+        {
+            data["repeat"] = "fixed";
+            data["count"] = 3;
+            data["delay"] = 1;
+        });
+
+        f.Send(new { type = "start" });
+        f.PumpUntil(() => f.Logs().Any(l => l.StartsWith("Completed", StringComparison.Ordinal)));
+
+        Assert.Contains("Start · LMB", f.Logs());
+        Assert.Contains("Completed · 3 clicks", f.Logs());
+
+        f.Send(new { type = "newProfile" });
+        Assert.Equal("Profile 2", f.Last("profile").GetProperty("profile").GetProperty("name").GetString());
+        Assert.Equal("Profile “Profile 2” created", f.Logs()[^1]);
+
+        f.Send(new { type = "duplicateProfile" });
+        Assert.Equal("Profile 2 (copy)", f.Last("profile").GetProperty("profile").GetProperty("name").GetString());
+
+        f.SetProfile(data => data["target"] = "points");
+        f.Send(new { type = "start" });
+        Assert.Equal("Add at least one route point", f.Last("toast").GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void JsonSettingsStore_KeepsTheLanguageAndSurvivesADamagedFile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "GhostClick.Tests." + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new JsonUiSettingsStore(root);
+            Assert.Equal("ru", store.Load().Language);
+
+            store.Save(new UiSettings { Language = "en" });
+            Assert.Equal("en", new JsonUiSettingsStore(root).Load().Language);
+
+            File.WriteAllText(store.FilePath, "{ not json");
+            Assert.Equal("ru", store.Load().Language);
+
+            File.WriteAllText(store.FilePath, """{ "language": "klingon" }""");
+            Assert.Equal("ru", store.Load().Language);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ how actions are pressed
+
+    [Fact]
+    public void SetProfile_CarriesHowEachActionIsPressedIntoTheEngineAndTheSave()
+    {
+        using var f = new Fixture();
+        f.Ready();
+
+        f.SetProfile(data => data["actions"] = new JsonArray(
+            Action("Mouse1", "click", press: 60),
+            Action("KeyW", "hold"),
+            Action("KeyA", "hold", hold: "time", holdMs: 800)));
+
+        Assert.True(f.Last("dirty").GetProperty("value").GetBoolean());
+
+        var inputs = f.Host.Engine.Profile.Action.Inputs;
+        Assert.Equal(60, inputs[0].PressMs);
+        Assert.True(inputs[1].IsHeldWhileRunning);
+        Assert.Equal(HoldMode.Timed, inputs[2].Hold);
+        Assert.Equal(800, inputs[2].HoldMs);
+
+        f.Send(new { type = "saveProfile" });
+        var saved = f.Store.Load("Default").Action.Inputs;
+        Assert.Equal(inputs, saved);
+
+        // And back out to the page the way it went in.
+        f.Send(new { type = "revertProfile" });
+        var actions = f.Last("profile").GetProperty("profile").GetProperty("data").GetProperty("actions");
+        Assert.Equal("hold", actions[1].GetProperty("mode").GetString());
+        Assert.Equal("run", actions[1].GetProperty("hold").GetString());
+        Assert.Equal("time", actions[2].GetProperty("hold").GetString());
+        Assert.Equal(800, actions[2].GetProperty("holdMs").GetInt32());
+        Assert.Equal(60, actions[0].GetProperty("press").GetInt32());
+    }
+
+    [Fact]
+    public void HeldActions_AreHeldForTheRunAndReleasedWhenItStops()
+    {
+        using var f = new Fixture();
+        f.Ready();
+        f.SetProfile(data =>
+        {
+            data["actions"] = new JsonArray(Action("KeyW", "hold"), Action("Mouse1", "click", press: 1));
+            data["delay"] = 1;
+        });
+
+        f.Send(new { type = "start" });
+        f.PumpUntil(() => f.Live.Events.Count(e => e.Kind == InjectedEventKind.MouseUp) >= 3);
+        f.Send(new { type = "stop" });
+        f.PumpUntil(() => f.Last("state").GetProperty("state").GetString() == "stopped");
+
+        Assert.Equal(1, f.Live.Events.Count(e => e.Kind == InjectedEventKind.KeyDown && e.Key == VirtualKey.W));
+        Assert.Equal("KeyUp W", f.Live.Events.Last(e => e.Kind != InjectedEventKind.Move).ToString());
+    }
+
+    [Fact]
+    public void ANegativePressIsReportedInTheInterfacesWords()
+    {
+        using var f = new Fixture();
+        f.Ready();
+        f.SetProfile(data => data["actions"] = new JsonArray(Action("KeyE", "click", press: -5)));
+
+        f.Send(new { type = "start" });
+
+        Assert.Equal("Длительность нажатия не может быть отрицательной", f.Last("toast").GetProperty("message").GetString());
+    }
+
+    private static JsonObject Action(string key, string mode, int press = 30, string hold = "run", int holdMs = 500) => new()
+    {
+        ["mods"] = new JsonArray(),
+        ["key"] = key,
+        ["mode"] = mode,
+        ["press"] = press,
+        ["hold"] = hold,
+        ["holdMs"] = holdMs,
+    };
+
     private static JsonObject Chord(string key, params string[] mods) =>
         new() { ["mods"] = new JsonArray(mods.Select(m => (JsonNode)m).ToArray()), ["key"] = key };
 
@@ -507,8 +698,9 @@ public class UiBridgeTests
     /// <summary>A host wired to recorders, an in-memory store and a hand-driven hotkey service.</summary>
     private sealed class Fixture : IDisposable
     {
-        public Fixture(InMemoryProfileStore? store = null)
+        public Fixture(InMemoryProfileStore? store = null, IUiSettingsStore? settings = null)
         {
+            Settings = settings ?? new InMemoryUiSettingsStore();
             Live = new RecordingInputInjector(new ScreenPoint(300, 200));
             Injector = new SwitchableInputInjector(Live, new RecordingInputInjector());
             Hotkeys = new ManualHotkeyService();
@@ -521,7 +713,7 @@ public class UiBridgeTests
                 new FixedScreenGeometry(1920, 1080),
                 NeutralRandomSource.Instance);
             Channel = new FakeChannel();
-            Bridge = new UiBridge(Host, Injector, Channel, () => new DateTime(2026, 10, 16, 12, 34, 56));
+            Bridge = new UiBridge(Host, Injector, Channel, () => new DateTime(2026, 10, 16, 12, 34, 56), Settings);
             Bridge.Start();
         }
 
@@ -532,6 +724,8 @@ public class UiBridgeTests
         public ManualHotkeyService Hotkeys { get; }
 
         public InMemoryProfileStore Store { get; }
+
+        public IUiSettingsStore Settings { get; }
 
         public ClickerHost Host { get; }
 

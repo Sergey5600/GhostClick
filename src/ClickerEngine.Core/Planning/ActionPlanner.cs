@@ -66,8 +66,9 @@ public sealed class ActionPlanner
             }
 
             // "Click where the cursor is" means no movement at all - unless position jitter
-            // is on, in which case we nudge around the current spot on purpose.
-            if (_profile.Jitter.PositionJitterEnabled)
+            // is on, in which case we nudge around the current spot on purpose. A tick that
+            // presses nothing has no spot to aim at, and nudging would drag a held button.
+            if (_profile.Jitter.PositionJitterEnabled && TickEntries().Length > 0)
             {
                 // Jitter around the spot the user aimed at, not around our own previous
                 // nudge: offsets taken from the last jittered position would add up into a
@@ -217,24 +218,27 @@ public sealed class ActionPlanner
     }
 
     /// <summary>
-    /// The press/release steps for one logical action. Every input goes down in list order,
-    /// they are held together, then released in reverse order; the modifiers of all inputs
-    /// wrap the whole thing, double click included.
+    /// The press/release steps for one action tick. Every input the tick presses goes down at
+    /// its start, in list order. A click comes up after its press time - and with a double
+    /// click goes down again once every first click is up and the gap has passed - and a timed
+    /// hold comes up after its hold time. Releases due at the same moment go in reverse list
+    /// order. The modifiers of all of them wrap the whole tick, except the ones an input held
+    /// for the run already keeps down. The last release completes the action, so a chord, a
+    /// double click and a tick that mixes clicks and holds are each still one action; a tick
+    /// with nothing to press is a single <see cref="EngineStep.Tick"/>.
     /// </summary>
     private IEnumerable<EngineStep> EmitAction()
     {
-        var action = _profile.Action;
-        int repeats = action.ClickType == ClickType.Double ? 2 : 1;
-
-        // The same key listed twice (say E and Ctrl+E) is still one physical key.
-        var inputs = action.Inputs?.Where(i => i is not null).ToArray() ?? Array.Empty<InputChord>();
-        var keys = inputs.Select(i => i.Key).Where(k => k != VirtualKey.None).Distinct().ToArray();
-        if (keys.Length == 0)
+        var entries = TickEntries();
+        var pressed = entries.DistinctBy(i => i.Key).ToArray();
+        if (pressed.Length == 0)
         {
+            yield return EngineStep.Tick();
             yield break;
         }
 
-        var modifierFlags = inputs.Aggregate(KeyModifiers.None, (all, i) => all | i.Modifiers);
+        var heldModifiers = _profile.Action.HeldWhileRunning.Aggregate(KeyModifiers.None, (all, i) => all | i.Modifiers);
+        var modifierFlags = entries.Aggregate(KeyModifiers.None, (all, i) => all | i.Modifiers) & ~heldModifiers;
         var modifiers = EnumerateModifiers(modifierFlags).ToArray();
 
         foreach (var modifier in modifiers)
@@ -242,34 +246,31 @@ public sealed class ActionPlanner
             yield return EngineStep.KeyDown(modifier, isModifier: true);
         }
 
-        for (int i = 0; i < repeats; i++)
+        var events = Timeline(pressed);
+        long now = 0;
+
+        for (int e = 0; e < events.Count; e++)
         {
-            if (i > 0 && action.DoubleClickGapMs > 0)
+            var press = events[e];
+            if (press.Time > now)
             {
-                yield return EngineStep.Wait(action.DoubleClickGapMs);
+                yield return EngineStep.Wait(TimeSpan.FromMilliseconds(press.Time - now));
+                now = press.Time;
             }
 
-            foreach (var key in keys)
+            var key = pressed[press.Input].Key;
+            if (press.Down)
             {
                 yield return key.TryGetMouseButton(out var button)
                     ? EngineStep.MouseDown(button)
                     : EngineStep.KeyDown(key);
             }
-
-            var hold = NextHoldDuration();
-            if (hold > 0)
+            else
             {
-                yield return EngineStep.Wait(hold);
-            }
-
-            for (int k = keys.Length - 1; k >= 0; k--)
-            {
-                // Only the very last release completes the action, so a chord of three
-                // inputs is still one action and a double click is still one action.
-                bool completes = i == repeats - 1 && k == 0;
-                yield return keys[k].TryGetMouseButton(out var button)
+                bool completes = e == events.Count - 1;
+                yield return key.TryGetMouseButton(out var button)
                     ? EngineStep.MouseUp(button, completesAction: completes)
-                    : EngineStep.KeyUp(keys[k], completesAction: completes);
+                    : EngineStep.KeyUp(key, completesAction: completes);
             }
         }
 
@@ -280,18 +281,81 @@ public sealed class ActionPlanner
         }
     }
 
-    /// <summary>How long the next press is held: fixed, or drawn from the configured range.</summary>
-    private int NextHoldDuration()
+    /// <summary>
+    /// The entries an action tick presses: everything but the inputs held for the whole run,
+    /// and any other entry for a key one of those already holds down. The same key listed
+    /// twice (say E and Ctrl+E) is still one physical key: it is pressed the way its first
+    /// entry says, inside the modifiers of both.
+    /// </summary>
+    private InputChord[] TickEntries()
     {
-        var action = _profile.Action;
-        if (!action.RandomizeHoldDuration)
+        var inputs = _profile.Action.Inputs?.Where(i => i is not null && i.Key != VirtualKey.None).ToArray()
+            ?? Array.Empty<InputChord>();
+        var held = inputs.Where(i => i.IsHeldWhileRunning).Select(i => i.Key).ToHashSet();
+
+        return inputs.Where(i => !i.IsHeldWhileRunning && !held.Contains(i.Key)).ToArray();
+    }
+
+    /// <summary>
+    /// When each input of a tick goes down and comes up, in milliseconds from the start of the
+    /// tick, in the order they happen.
+    /// </summary>
+    private List<PressEvent> Timeline(InputChord[] inputs)
+    {
+        var events = new List<PressEvent>(inputs.Length * 4);
+        var clicks = new List<int>(inputs.Length);
+        long firstClicksUp = 0;
+
+        for (int i = 0; i < inputs.Length; i++)
         {
-            return Math.Max(0, action.HoldDurationMs);
+            events.Add(new PressEvent(0, 0, true, i));
+
+            if (inputs[i].Mode == PressMode.Hold)
+            {
+                events.Add(new PressEvent(Math.Max(0, inputs[i].HoldMs), 0, false, i));
+                continue;
+            }
+
+            long up = NextPressDuration(inputs[i]);
+            events.Add(new PressEvent(up, 0, false, i));
+            firstClicksUp = Math.Max(firstClicksUp, up);
+            clicks.Add(i);
         }
 
-        int min = Math.Max(0, Math.Min(action.MinHoldDurationMs, action.MaxHoldDurationMs));
-        int max = Math.Max(0, Math.Max(action.MinHoldDurationMs, action.MaxHoldDurationMs));
-        return _random.NextInt(min, max);
+        // A double click clicks twice; a hold is held once.
+        if (_profile.Action.ClickType == ClickType.Double && clicks.Count > 0)
+        {
+            long second = firstClicksUp + Math.Max(0, _profile.Action.DoubleClickGapMs);
+            foreach (int i in clicks)
+            {
+                events.Add(new PressEvent(second, 1, true, i));
+                events.Add(new PressEvent(second + NextPressDuration(inputs[i]), 1, false, i));
+            }
+        }
+
+        // By time; at the same moment the first click before the second, a press before its
+        // own release (a zero-length press), presses in list order and releases in reverse.
+        events.Sort((a, b) =>
+            a.Time != b.Time ? a.Time.CompareTo(b.Time)
+            : a.Round != b.Round ? a.Round.CompareTo(b.Round)
+            : a.Down != b.Down ? (a.Down ? -1 : 1)
+            : a.Down ? a.Input.CompareTo(b.Input) : b.Input.CompareTo(a.Input));
+
+        return events;
+    }
+
+    /// <summary>How long the next click of <paramref name="input"/> is held: its press time, or a random time around it.</summary>
+    private long NextPressDuration(InputChord input)
+    {
+        int press = Math.Max(0, input.PressMs);
+        var action = _profile.Action;
+        if (!action.RandomizeHoldDuration || press == 0)
+        {
+            return press;
+        }
+
+        int spread = (int)Math.Round(press * Math.Clamp(action.PressSpreadPercent, 0, 100) / 100.0);
+        return _random.NextInt(press - spread, press + spread);
     }
 
     /// <summary>Interpolated cursor travel from wherever the cursor is now to a target.</summary>
@@ -352,7 +416,15 @@ public sealed class ActionPlanner
         }
     }
 
-    private static IEnumerable<VirtualKey> EnumerateModifiers(KeyModifiers modifiers)
+    /// <summary>One press or release within an action tick.</summary>
+    /// <param name="Time">Milliseconds from the start of the tick.</param>
+    /// <param name="Round">0 for the first click, 1 for the second click of a double click.</param>
+    /// <param name="Down">Press or release.</param>
+    /// <param name="Input">Index into the tick's inputs.</param>
+    private readonly record struct PressEvent(long Time, int Round, bool Down, int Input);
+
+    /// <summary>The virtual keys for a set of modifier flags, in the order they are pressed.</summary>
+    internal static IEnumerable<VirtualKey> EnumerateModifiers(KeyModifiers modifiers)
     {
         if (modifiers.HasFlag(KeyModifiers.Control))
         {

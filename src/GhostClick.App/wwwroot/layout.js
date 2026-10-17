@@ -1,18 +1,27 @@
 // Geometry and names of the drawn keyboard and mouse. Coordinates are in the unscaled
 // 1416x369 device block (the page scales it by 1.25). Keys are named by KeyboardEvent.code,
 // mouse buttons Mouse1..Mouse5 (4 = X1, 5 = X2) - the same names the host understands.
+// Words come from i18n.js in the current language.
 (function () {
   'use strict';
 
   const S = 60;
+  const { t } = window.GC_I18N;
 
+  // Title, description and the tag on assigned keys follow the language.
   const SLOTS = [
-    { id: 'toggle', title: 'Старт / Стоп', desc: 'Запускает и останавливает кликер', tag: 'СТАРТ', o: '48 209 88' },
-    { id: 'pause', title: 'Пауза', desc: 'Приостанавливает без сброса счётчиков', tag: 'ПАУЗА', o: '255 159 10' },
-    { id: 'panic', title: 'Аварийная остановка', desc: 'Немедленно прекращает все действия', tag: 'СТОП', o: '255 69 58' },
-    { id: 'action', title: 'Действия', desc: 'Клавиши и кнопки, которые кликер нажимает одновременно', tag: 'КЛИК', o: '10 132 255' },
-    { id: 'point', title: 'Добавить точку', desc: 'Добавляет позицию курсора в маршрут', tag: 'ТОЧКА', o: '191 90 242' },
-  ];
+    ['toggle', '48 209 88'],
+    ['pause', '255 159 10'],
+    ['panic', '255 69 58'],
+    ['action', '10 132 255'],
+    ['point', '191 90 242'],
+  ].map(([id, o]) => ({
+    id,
+    o,
+    get title() { return t('s_' + id); },
+    get desc() { return t('d_' + id); },
+    get tag() { return t('g_' + id); },
+  }));
 
   const MODS = {
     ControlLeft: 'Ctrl', ControlRight: 'Ctrl',
@@ -54,12 +63,13 @@
   add('ArrowUp', '↑', NX + 1, 4);
   seq(5, NX, [['ArrowLeft', '←'], ['ArrowDown', '↓'], ['ArrowRight', '→']]);
 
+  // ax/ay: where a popover over the button points, at the top of the button.
   const MOUSE = [
-    { id: 'Mouse1', label: 'ЛКМ', name: 'Левая кнопка', d: 'M132 4 A110 110 0 0 0 22 114 L22 143 L132 143 Z', lx: 72, ly: 100, showTag: true, fs: 18 },
-    { id: 'Mouse2', label: 'ПКМ', name: 'Правая кнопка', d: 'M132 4 A110 110 0 0 1 242 114 L242 143 L132 143 Z', lx: 192, ly: 100, showTag: true, fs: 18 },
-    { id: 'Mouse3', label: '', name: 'Колесо (СКМ)', d: 'M115 53 a17 17 0 0 1 34 0 v46 a17 17 0 0 1 -34 0 Z', lx: 132, ly: 0, showTag: false, fs: 9 },
-    { id: 'Mouse5', label: 'X2', name: 'Боковая X2', d: 'M23 162 L12 162 A9 9 0 0 0 3 171 L3 195 A9 9 0 0 0 12 204 L23 204 Z', lx: 13, ly: 187, showTag: false, fs: 11 },
-    { id: 'Mouse4', label: 'X1', name: 'Боковая X1', d: 'M23 210 L12 210 A9 9 0 0 0 3 219 L3 243 A9 9 0 0 0 12 252 L23 252 Z', lx: 13, ly: 235, showTag: false, fs: 11 },
+    { id: 'Mouse1', d: 'M132 4 A110 110 0 0 0 22 114 L22 143 L132 143 Z', lx: 72, ly: 100, ax: 72, ay: 20, showLabel: true, showTag: true, fs: 18 },
+    { id: 'Mouse2', d: 'M132 4 A110 110 0 0 1 242 114 L242 143 L132 143 Z', lx: 192, ly: 100, ax: 192, ay: 20, showLabel: true, showTag: true, fs: 18 },
+    { id: 'Mouse3', d: 'M115 53 a17 17 0 0 1 34 0 v46 a17 17 0 0 1 -34 0 Z', lx: 132, ly: 0, ax: 132, ay: 53, showLabel: false, showTag: false, fs: 9 },
+    { id: 'Mouse5', d: 'M23 162 L12 162 A9 9 0 0 0 3 171 L3 195 A9 9 0 0 0 12 204 L23 204 Z', lx: 13, ly: 187, ax: 13, ay: 162, showLabel: true, showTag: false, fs: 11 },
+    { id: 'Mouse4', d: 'M23 210 L12 210 A9 9 0 0 0 3 219 L3 243 A9 9 0 0 0 12 252 L23 252 Z', lx: 13, ly: 235, ax: 13, ay: 210, showLabel: true, showTag: false, fs: 11 },
   ];
 
   const MOUSE_BODY = 'M22 114 A110 110 0 0 1 242 114 L242 254 A110 110 0 0 1 22 254 Z';
@@ -73,14 +83,16 @@
   };
 
   // Keys whose shifted symbol goes on top and plain symbol in the corner.
-  const SUB = { Comma: ['<', ','], Period: ['>', '.'] };
+  const SUB = { Comma: ['<', ','], Period: ['>', '.'], Slash: ['?', '/'], Semicolon: [':', ';'], Quote: ['"', "'"] };
 
+  // Key labels read the same in both languages; mouse buttons do not (ЛКМ / LMB).
   const LABEL = {};
   KEYS.forEach(k => { LABEL[k.id] = k.label; });
-  MOUSE.forEach(m => { LABEL[m.id] = m.label || 'СКМ'; });
+  MOUSE.forEach(m => { LABEL[m.id] = m.id; });
 
   // Keys the host may report that are not drawn (numpad, F13+, raw VK_xx codes).
   function label(code) {
+    if (/^Mouse[1-5]$/.test(code)) return t('lbl_' + code);
     if (LABEL[code]) return LABEL[code];
     const numpad = /^Numpad(\d)$/.exec(code);
     if (numpad) return 'Num ' + numpad[1];

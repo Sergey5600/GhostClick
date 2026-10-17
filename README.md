@@ -16,7 +16,7 @@
 <p align="center">
   <a href="https://github.com/Sergey5600/GhostClick/releases/latest"><img src="assets/readme/download-en.png" alt="Download for Windows" width="324"></a>
   <br>
-  <sub>Windows 10 and 11, 64-bit · the interface is in Russian for&nbsp;now</sub>
+  <sub>Windows 10 and 11, 64-bit · in English and Russian</sub>
 </p>
 
 ## How to install
@@ -36,22 +36,26 @@ the installer adds it for you.
 
 ## How to use
 
-The GhostClick interface is in Russian for now, so the steps below give each label as you'll see
-it, followed by what it means.
+GhostClick opens in Russian the first time: click **EN** at the top right to switch it to English.
+It remembers the choice.
 
-1. Click **Действия** (Actions) at the top of the window, pick what to press on the on-screen
-   keyboard and mouse, and click **Готово** (Done). You can pick several, and they're pressed
-   together. Right after installing, the left mouse button (**ЛКМ**) is already chosen.
-2. Point the cursor where you need it and press **F6**: GhostClick starts clicking. Press **F6**
-   again to stop, **F7** to pause, or **Ctrl + F12** for an emergency stop.
-3. To click in different places, point the cursor and press **F9** for each one: every point is
+1. Click **Actions** at the top of the window, pick what to press on the on-screen keyboard and
+   mouse, and click **Done**. You can pick several, and they're pressed together. Right after
+   installing, the left mouse button (**LMB**) is already chosen.
+2. To choose how a key is pressed, hover over it on the keyboard: **Click** presses it on every
+   cycle for as long as you set, and **Hold** keeps it down, either the whole time the clicker
+   runs (hold **W** and **A** together to walk in circles) or for a set time on every cycle.
+3. Point the cursor where you need it and press **F6**: GhostClick starts clicking. Press **F6**
+   again to stop, **F7** to pause, or **Ctrl + F12** for an emergency stop. Held keys are let go
+   on pause and stop.
+4. To click in different places, point the cursor and press **F9** for each one: every point is
    added to a route, and GhostClick visits them in turn.
-4. Once everything is set up, click **Сохранить** (Save) at the top of the window, next to the
-   profile name. Otherwise your settings are lost when GhostClick restarts.
+5. Once everything is set up, click **Save** at the top of the window, next to the profile name.
+   Otherwise your settings are lost when GhostClick restarts.
 
 The hotkeys work even when the GhostClick window isn't active, for example while you're in a game.
 You can change any of them: click it at the top of the window, then press the key you want.
-Everything else is in **Настройки** (Settings) in the top-right corner.
+Everything else is in **Settings** in the top-right corner.
 
 <p align="center">
   <img src="assets/readme/screenshot.png" alt="The GhostClick window: assigned keys are highlighted on the keyboard and mouse, with the control buttons and counters at the bottom" width="900">
@@ -61,6 +65,8 @@ Everything else is in **Настройки** (Settings) in the top-right corner.
 
 - **Mouse and keyboard:** left, right, middle and side mouse buttons, keys and combinations
   with Ctrl, Shift, Alt and Win, one at a time or several at once.
+- **Click or hold:** each key has its own press length, or stays held down while the clicker
+  runs or for a set time on every cycle; clicks and held keys mix freely.
 - **Single or double click**, an interval in milliseconds, forever or a set number of times.
 - **Two modes:** the hotkey turns the clicker on and off, or it clicks only while you hold it.
 - **A route of points:** the cursor moves from point to point instantly or smoothly.
@@ -68,6 +74,7 @@ Everything else is in **Настройки** (Settings) in the top-right corner.
 - **Safety:** an emergency stop, a stop as soon as you grab the mouse, clicks only in the window
   where you started.
 - **Profiles** for different games and tasks; the last one opens by itself at launch.
+- **English and Russian** interface.
 
 ## Good to know
 
