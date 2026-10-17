@@ -21,8 +21,8 @@
 # Needs: librsvg2-bin (rsvg-convert) and ImageMagick (convert, identify).
 set -euo pipefail
 
-side_sizes=(202x386 235x475 269x564 335x683 370x742 437x861 471x980 572x1158)
-header_sizes=(55x58 64x71 73x85 92x103 101x112 119x129 128x147 156x174)
+side_sizes=(202x386 235x475 302x564 335x683 403x742 437x861 504x980 605x1158)
+header_sizes=(55x58 64x71 83x85 92x103 110x112 119x129 138x147 165x174)
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 out="$here/../installer/art"
@@ -45,11 +45,20 @@ for size in "${side_sizes[@]}"; do
     convert "$work/side.png" -alpha off -density 0 -type TrueColor "BMP3:$out/WizardImage-$size.bmp"
 done
 
-# The header sits on the white page header.
+# The header icon sits on the white page header. Like build-icon.sh, it puts the plate's
+# edges on whole pixels: the room AppIcon.svg leaves around the plate for its shadow is
+# rounded down to whole pixels and the plate fills the rest.
 for size in "${header_sizes[@]}"; do
     w=${size%x*}; h=${size#*x}
     icon=$(( w < h ? w : h ))
-    rsvg-convert -w "$icon" -h "$icon" -o "$work/icon.png" "$here/AppIcon.svg"
+    view_box=$(awk -v s="$icon" 'BEGIN {
+        x = 64; y = 40; p = 1024; c = 1072          # plate and canvas in AppIcon.svg
+        margin = int(s * (c - p) / 2 / c)
+        v = p * s / (s - 2 * margin)
+        printf "%.4f %.4f %.4f %.4f", x + p / 2 - v / 2, y + p / 2 - v / 2, v, v
+    }')
+    sed "s|viewBox=\"40 16 1072 1072\"|viewBox=\"$view_box\"|" "$here/AppIcon.svg" > "$work/icon.svg"
+    rsvg-convert -w "$icon" -h "$icon" -o "$work/icon.png" "$work/icon.svg"
     convert -size "${w}x${h}" xc:white "$work/icon.png" -gravity center -composite \
         -alpha off -density 0 -type TrueColor "BMP3:$out/WizardSmallImage-$size.bmp"
 done
