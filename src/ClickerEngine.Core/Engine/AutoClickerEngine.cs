@@ -7,8 +7,8 @@ using ClickerEngine.Core.Timing;
 namespace ClickerEngine.Core.Engine;
 
 /// <summary>
-/// Runs a <see cref="ClickerProfile"/>: owns the run thread, the state machine, the failsafe
-/// checks and the counters.
+/// Runs a <see cref="ClickerProfile"/> - a clicker or a script - owns the run thread, the
+/// state machine, the failsafe checks and the counters.
 /// <para>
 /// It knows nothing about UI. Everything it does goes through <see cref="IInputInjector"/>,
 /// <see cref="IClock"/> and <see cref="IRandomSource"/>, and everything it reports comes out
@@ -35,6 +35,7 @@ public sealed class AutoClickerEngine : IDisposable
     private StopReason _pendingStopReason = StopReason.User;
     private EngineState _state = EngineState.Idle;
     private long _currentRunActions;
+    private ScriptLocation? _currentBlock;
     private bool _disposed;
 
     /// <param name="injector">Where input goes.</param>
@@ -70,6 +71,13 @@ public sealed class AutoClickerEngine : IDisposable
 
     /// <summary>Raised after each completed action.</summary>
     public event EventHandler<ActionExecutedEventArgs>? ActionExecuted;
+
+    /// <summary>
+    /// Raised when a script run moves on to a block - each time it does, so a block inside a
+    /// repeat is reported once per iteration - as soon as the block's first step is due, before
+    /// any wait for its window or a pause. Never raised for a clicker.
+    /// </summary>
+    public event EventHandler<BlockStartedEventArgs>? BlockStarted;
 
     /// <summary>
     /// The profile to run. Assigning while a run is in progress does not affect that run:
@@ -115,6 +123,13 @@ public sealed class AutoClickerEngine : IDisposable
 
     /// <summary>Actions completed in the current (or most recent) run.</summary>
     public long CurrentRunActions => Interlocked.Read(ref _currentRunActions);
+
+    /// <summary>
+    /// The script block the current run is on - executing it, or holding it for its window or
+    /// a pause - or null when no script is running. During the automatic pause between two
+    /// blocks it is still the earlier one.
+    /// </summary>
+    public ScriptLocation? CurrentBlock => Volatile.Read(ref _currentBlock);
 
     /// <summary>How long <see cref="Stop"/> waits for the run thread before giving up.</summary>
     public TimeSpan StopTimeout { get; set; } = TimeSpan.FromSeconds(5);
@@ -176,7 +191,7 @@ public sealed class AutoClickerEngine : IDisposable
         Statistics.RecordRunStarted();
         Started?.Invoke(this, new EngineStartedEventArgs(
             snapshot,
-            new ActionPlanner(snapshot, _injector, _screen, _random).PlannedActionCount));
+            RunPlanner.For(snapshot, _injector, _screen, _random).PlannedActionCount));
 
         thread.Start();
         return true;
@@ -324,7 +339,7 @@ public sealed class AutoClickerEngine : IDisposable
 
         var runStart = _clock.Elapsed;
         var startCursor = _injector.GetCursorPosition();
-        var context = new RunContext(startCursor);
+        var context = new RunContext(startCursor, profile);
 
         // Ask Windows for a 1 ms timer tick so short waits actually land near where we
         // asked. Released as soon as the run ends.
@@ -332,10 +347,14 @@ public sealed class AutoClickerEngine : IDisposable
 
         try
         {
-            var planner = new ActionPlanner(profile, _injector, _screen, _random);
+            var planner = RunPlanner.For(profile, _injector, _screen, _random);
 
             foreach (var step in planner.CreatePlan())
             {
+                // Before the wait for its turn: a block held for its window, or paused before,
+                // is the one the run is on.
+                ReportBlock(step);
+
                 if (!AwaitTurn(step, profile, runStart, context, token, out var breach))
                 {
                     reason = breach;
@@ -365,6 +384,7 @@ public sealed class AutoClickerEngine : IDisposable
 
             TryReleaseHeldInput(profile, context);
             TryRestoreCursor(profile, context, startCursor);
+            Volatile.Write(ref _currentBlock, null);
 
             EngineStateChangedEventArgs? transition;
 
@@ -416,7 +436,7 @@ public sealed class AutoClickerEngine : IDisposable
                 return true;
             }
 
-            if (TryGetTargetWindow(profile, context, out target))
+            if (TryGetTargetWindow(step, profile, context, out target))
             {
                 if (!held)
                 {
@@ -441,7 +461,7 @@ public sealed class AutoClickerEngine : IDisposable
 
                 // Whatever the user does with the mouse while we wait is not a deviation from
                 // our plan; the reference point is taken again once the action can go ahead.
-                if (profile.Target.Mode == TargetMode.CurrentCursor)
+                if (context.AtCursor)
                 {
                     context.ExpectedCursor = null;
                 }
@@ -459,7 +479,7 @@ public sealed class AutoClickerEngine : IDisposable
 
         // Clicking at the cursor: the user aims, then lets go of the mouse. The first action
         // marks where it was left, so moving it later counts as taking it back.
-        if (profile.Target.Mode == TargetMode.CurrentCursor && context.ExpectedCursor is null)
+        if (context.AtCursor && context.ExpectedCursor is null)
         {
             context.ExpectedCursor = _injector.GetCursorPosition();
         }
@@ -474,7 +494,7 @@ public sealed class AutoClickerEngine : IDisposable
     /// the cursor, key presses by the foreground window. <paramref name="target"/> is the
     /// window the action would go to (0 when unknown), which is what a run locks onto.
     /// </summary>
-    private bool TryGetTargetWindow(ClickerProfile profile, RunContext context, out long target)
+    private bool TryGetTargetWindow(EngineStep step, ClickerProfile profile, RunContext context, out long target)
     {
         target = 0;
         if (_windowProbe is null)
@@ -482,9 +502,12 @@ public sealed class AutoClickerEngine : IDisposable
             return true;
         }
 
+        // A script's press names its device; a clicker's whole action list decides for it.
         var action = profile.Action;
-        long clicked = action.UsesMouse ? _windowProbe.GetWindowAt(_injector.GetCursorPosition()) : 0;
-        long typed = action.UsesKeyboard ? _windowProbe.GetForegroundWindow() : 0;
+        bool mouse = step.Device is { } device ? device == ActionKind.Mouse : action.UsesMouse;
+        bool keyboard = step.Device is { } kind ? kind == ActionKind.Keyboard : action.UsesKeyboard;
+        long clicked = mouse ? _windowProbe.GetWindowAt(_injector.GetCursorPosition()) : 0;
+        long typed = keyboard ? _windowProbe.GetForegroundWindow() : 0;
         target = clicked != 0 ? clicked : typed;
 
         if (IsOwn(clicked) || IsOwn(typed))
@@ -561,10 +584,27 @@ public sealed class AutoClickerEngine : IDisposable
         Interlocked.Exchange(ref _currentRunActions, context.Actions);
         Statistics.RecordAction();
 
+        // A clicker's action is its whole input list; a script's is the one block completing it.
+        bool mouse = profile.Kind == ProfileKind.Script
+            ? step.Kind == EngineStepKind.MouseUp
+            : profile.Action.UsesMouse;
+
         ActionExecuted?.Invoke(this, new ActionExecutedEventArgs(
             context.Actions,
             context.HasCommandedMove ? context.LastCommandedPosition : _injector.GetCursorPosition(),
-            profile.Action.UsesMouse ? ActionKind.Mouse : ActionKind.Keyboard));
+            mouse ? ActionKind.Mouse : ActionKind.Keyboard));
+    }
+
+    /// <summary>Publishes the script block a step belongs to, once per execution of the block.</summary>
+    private void ReportBlock(EngineStep step)
+    {
+        if (step.Location is not { } location || ReferenceEquals(location, CurrentBlock))
+        {
+            return;
+        }
+
+        Volatile.Write(ref _currentBlock, location);
+        BlockStarted?.Invoke(this, new BlockStartedEventArgs(location));
     }
 
     /// <summary>Checks the run against the safety limits before executing the next step.</summary>
@@ -681,7 +721,21 @@ public sealed class AutoClickerEngine : IDisposable
     /// <summary>Mutable per-run bookkeeping, kept out of the engine's shared state.</summary>
     private sealed class RunContext
     {
-        public RunContext(ScreenPoint startCursor) => LastCommandedPosition = startCursor;
+        private readonly bool _script;
+        private readonly bool _clickerAtCursor;
+
+        public RunContext(ScreenPoint startCursor, ClickerProfile profile)
+        {
+            LastCommandedPosition = startCursor;
+            _script = profile.Kind == ProfileKind.Script;
+            _clickerAtCursor = profile.Target.Mode == TargetMode.CurrentCursor;
+        }
+
+        /// <summary>
+        /// True while actions land wherever the user left the cursor: always for a clicker
+        /// clicking at the cursor, and for a script until it first moves the cursor itself.
+        /// </summary>
+        public bool AtCursor => _script ? !HasCommandedMove : _clickerAtCursor;
 
         public long Actions { get; set; }
 

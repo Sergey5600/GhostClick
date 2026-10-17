@@ -15,7 +15,7 @@ namespace ClickerEngine.Core.Planning;
 /// An infinite run yields an infinite sequence; the engine is what stops enumerating.
 /// </para>
 /// </summary>
-public sealed class ActionPlanner
+public sealed class ActionPlanner : IRunPlanner
 {
     private readonly ClickerProfile _profile;
     private readonly ICursorProvider _cursor;
@@ -235,7 +235,7 @@ public sealed class ActionPlanner
         }
 
         var modifierFlags = inputs.Aggregate(KeyModifiers.None, (all, i) => all | i.Modifiers);
-        var modifiers = EnumerateModifiers(modifierFlags).ToArray();
+        var modifiers = PlanSteps.Modifiers(modifierFlags);
 
         foreach (var modifier in modifiers)
         {
@@ -251,12 +251,10 @@ public sealed class ActionPlanner
 
             foreach (var key in keys)
             {
-                yield return key.TryGetMouseButton(out var button)
-                    ? EngineStep.MouseDown(button)
-                    : EngineStep.KeyDown(key);
+                yield return PlanSteps.Down(key);
             }
 
-            var hold = NextHoldDuration();
+            var hold = PlanSteps.HoldDuration(action, _random);
             if (hold > 0)
             {
                 yield return EngineStep.Wait(hold);
@@ -267,9 +265,7 @@ public sealed class ActionPlanner
                 // Only the very last release completes the action, so a chord of three
                 // inputs is still one action and a double click is still one action.
                 bool completes = i == repeats - 1 && k == 0;
-                yield return keys[k].TryGetMouseButton(out var button)
-                    ? EngineStep.MouseUp(button, completesAction: completes)
-                    : EngineStep.KeyUp(keys[k], completesAction: completes);
+                yield return PlanSteps.Up(keys[k], completes);
             }
         }
 
@@ -280,35 +276,8 @@ public sealed class ActionPlanner
         }
     }
 
-    /// <summary>How long the next press is held: fixed, or drawn from the configured range.</summary>
-    private int NextHoldDuration()
-    {
-        var action = _profile.Action;
-        if (!action.RandomizeHoldDuration)
-        {
-            return Math.Max(0, action.HoldDurationMs);
-        }
-
-        int min = Math.Max(0, Math.Min(action.MinHoldDurationMs, action.MaxHoldDurationMs));
-        int max = Math.Max(0, Math.Max(action.MinHoldDurationMs, action.MaxHoldDurationMs));
-        return _random.NextInt(min, max);
-    }
-
     /// <summary>Interpolated cursor travel from wherever the cursor is now to a target.</summary>
-    private IEnumerable<EngineStep> MoveSteps(ScreenPoint target)
-    {
-        var from = _cursor.GetCursorPosition();
-
-        foreach (var sample in MotionPlanner.Plan(from, target, _profile.Movement, _profile.Jitter, _random))
-        {
-            if (sample.Delay > TimeSpan.Zero)
-            {
-                yield return EngineStep.Wait(sample.Delay);
-            }
-
-            yield return EngineStep.MoveTo(sample.Position);
-        }
-    }
+    private IEnumerable<EngineStep> MoveSteps(ScreenPoint target) => PlanSteps.Travel(_cursor, target, _profile, _random);
 
     /// <summary>The delay before the next action, with range randomization and timing jitter.</summary>
     private TimeSpan NextInterval()
@@ -349,29 +318,6 @@ public sealed class ActionPlanner
         for (long i = 0; ; i++)
         {
             yield return i;
-        }
-    }
-
-    private static IEnumerable<VirtualKey> EnumerateModifiers(KeyModifiers modifiers)
-    {
-        if (modifiers.HasFlag(KeyModifiers.Control))
-        {
-            yield return VirtualKey.LeftControl;
-        }
-
-        if (modifiers.HasFlag(KeyModifiers.Alt))
-        {
-            yield return VirtualKey.LeftAlt;
-        }
-
-        if (modifiers.HasFlag(KeyModifiers.Shift))
-        {
-            yield return VirtualKey.LeftShift;
-        }
-
-        if (modifiers.HasFlag(KeyModifiers.Windows))
-        {
-            yield return VirtualKey.LeftWindows;
         }
     }
 }
