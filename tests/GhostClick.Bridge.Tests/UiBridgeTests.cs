@@ -581,6 +581,9 @@ public class UiBridgeTests
         f.SetProfile(data => data["target"] = "points");
         f.Send(new { type = "start" });
         Assert.Equal("Add at least one route point", f.Last("toast").GetProperty("message").GetString());
+
+        f.Send(new { type = "newProfile", kind = "script" });
+        Assert.Equal("Script 4", f.Last("profile").GetProperty("profile").GetProperty("name").GetString());
     }
 
     [Fact]
@@ -696,7 +699,7 @@ public class UiBridgeTests
         profileMessage.GetProperty("profiles").EnumerateArray().Select(p => p.GetString()).ToArray();
 
     /// <summary>A host wired to recorders, an in-memory store and a hand-driven hotkey service.</summary>
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         public Fixture(InMemoryProfileStore? store = null, IUiSettingsStore? settings = null)
         {
@@ -795,7 +798,7 @@ public class UiBridgeTests
     /// Stands in for the WebView: records what the bridge sends and runs posted work only
     /// when the test pumps, the way a dispatcher would.
     /// </summary>
-    private sealed class FakeChannel : IUiChannel
+    internal sealed class FakeChannel : IUiChannel
     {
         private readonly ConcurrentQueue<Action> _posted = new();
 

@@ -131,3 +131,26 @@ public enum BoundsBehavior
     /// <summary>Jump back to the start point and keep going.</summary>
     Restart = 3,
 }
+
+/// <summary>What a profile runs.</summary>
+public enum ProfileKind
+{
+    /// <summary>One action repeated on an interval: the classic clicker.</summary>
+    Clicker = 0,
+
+    /// <summary>A list of blocks run top to bottom; see <see cref="ScriptSettings"/>.</summary>
+    Script = 1,
+}
+
+/// <summary>How many times a whole script runs from top to bottom.</summary>
+public enum ScriptRunMode
+{
+    /// <summary>Once.</summary>
+    Once = 0,
+
+    /// <summary><see cref="ScriptSettings.RunCount"/> times.</summary>
+    FixedCount = 1,
+
+    /// <summary>Over and over until stopped by a hotkey, a failsafe or a «Стоп» block.</summary>
+    Infinite = 2,
+}

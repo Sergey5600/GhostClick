@@ -6,6 +6,7 @@ using ClickerEngine.Core.Configuration;
 using ClickerEngine.Core.Engine;
 using ClickerEngine.Core.Hotkeys;
 using ClickerEngine.Core.Input;
+using ClickerEngine.Core.Planning;
 using ClickerEngine.Core.Points;
 using ClickerEngine.Core.Profiles;
 
@@ -63,6 +64,9 @@ public sealed class UiBridge : IDisposable
     private UiSettings _settings = new();
     private UiText _text = UiText.Russian;
     private string _savedJson = string.Empty;
+    private string _sentIssues = string.Empty;
+    private ScriptLocation? _sentBlock;
+    private int _blockFlushPending;
     private int _runTimeLimitSeconds;
     private bool _started;
     private bool _ready;
@@ -219,7 +223,7 @@ public sealed class UiBridge : IDisposable
                 LoadProfile(ReadString(message, "name"));
                 break;
             case "newProfile":
-                NewProfile();
+                NewProfile(ReadString(message, "kind"));
                 break;
             case "duplicateProfile":
                 DuplicateProfile();
@@ -248,6 +252,7 @@ public sealed class UiBridge : IDisposable
             SetListening(false);
         }
 
+        _sentBlock = _host.Engine.CurrentBlock;
         Send(new
         {
             type = "init",
@@ -283,7 +288,7 @@ public sealed class UiBridge : IDisposable
         }
         catch (ProfileValidationException ex)
         {
-            Toast(Describe(ex), error: true);
+            Toast(Describe(ex, Current.Script), error: true);
         }
     }
 
@@ -343,6 +348,7 @@ public sealed class UiBridge : IDisposable
         ProfileMapper.Apply(dto, Current);
         ApplyToEngine();
         Send(new { type = "dirty", value = IsDirty });
+        SendIssuesIfChanged();
     }
 
     /// <summary>
@@ -399,7 +405,7 @@ public sealed class UiBridge : IDisposable
         }
         catch (ProfileValidationException ex)
         {
-            Toast(Describe(ex), error: true);
+            Toast(Describe(ex, Current.Script), error: true);
             return;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -457,18 +463,20 @@ public sealed class UiBridge : IDisposable
         Log(_text.ProfileLoaded(Current.Name));
     }
 
-    private void NewProfile()
+    /// <summary>A new clicker, or with <paramref name="kind"/> <c>script</c>, a new script.</summary>
+    private void NewProfile(string? kind)
     {
         if (_host.Engine.IsActive)
         {
             _host.Engine.Stop();
         }
 
-        var name = UniqueName(_text.NewProfileName, _host.Profiles.AvailableProfiles.Count + 1);
+        bool script = kind == "script";
+        var name = UniqueName(script ? _text.NewScriptName : _text.NewProfileName, _host.Profiles.AvailableProfiles.Count + 1);
 
         try
         {
-            _host.Profiles.CreateNew(name);
+            _host.Profiles.CreateNew(name, script ? UiDefaults.CreateScript : null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -489,7 +497,7 @@ public sealed class UiBridge : IDisposable
         var errors = ProfileValidator.Validate(Current);
         if (errors.Count > 0)
         {
-            Toast(Describe(errors), error: true);
+            Toast(Describe(errors, Current.Script), error: true);
             return;
         }
 
@@ -537,6 +545,7 @@ public sealed class UiBridge : IDisposable
         _host.Engine.StateChanged += OnStateChanged;
         _host.Engine.Started += OnStarted;
         _host.Engine.Stopped += OnStopped;
+        _host.Engine.BlockStarted += OnBlockStarted;
         _host.Controller.PointRecorded += OnPointRecorded;
         _host.Controller.StartRejected += OnStartRejected;
         _host.Hotkeys.HotkeyTriggered += OnHotkeyTriggered;
@@ -547,6 +556,7 @@ public sealed class UiBridge : IDisposable
         _host.Engine.StateChanged -= OnStateChanged;
         _host.Engine.Started -= OnStarted;
         _host.Engine.Stopped -= OnStopped;
+        _host.Engine.BlockStarted -= OnBlockStarted;
         _host.Controller.PointRecorded -= OnPointRecorded;
         _host.Controller.StartRejected -= OnStartRejected;
         _host.Hotkeys.HotkeyTriggered -= OnHotkeyTriggered;
@@ -582,6 +592,7 @@ public sealed class UiBridge : IDisposable
         _injector.ResetDryRunCursor();
         _injector.Recorder.Clear();
 
+        int? scriptBlocks = e.Profile.Kind == ProfileKind.Script ? ScriptSettings.Walk(e.Profile.Script.Blocks).Count() : null;
         var inputs = e.Profile.Action.Inputs.Select(i => (i.Key, i.Modifiers)).ToArray();
         bool dryRun = _injector.DryRun;
         int timeLimit = e.Profile.Safety.MaxRunDurationSeconds;
@@ -591,7 +602,9 @@ public sealed class UiBridge : IDisposable
             _runTimeLimitSeconds = timeLimit;
             _runTime.Restart();
 
-            var actions = string.Join(" + ", inputs.Select(i => KeyCodes.Describe(i.Key, i.Modifiers, _text.Language)));
+            var actions = scriptBlocks is { } blocks
+                ? _text.ScriptSummary(blocks)
+                : string.Join(" + ", inputs.Select(i => KeyCodes.Describe(i.Key, i.Modifiers, _text.Language)));
             Log($"{_text.Started} · {(actions.Length > 0 ? actions : _text.NoActions)}{(dryRun ? " · dry run" : string.Empty)}");
             SendState();
         });
@@ -600,6 +613,7 @@ public sealed class UiBridge : IDisposable
     private void OnStopped(object? sender, EngineStoppedEventArgs e) => _channel.Post(() =>
     {
         _runTime.Stop();
+        SendBlock(null);
         Log($"{StopReasonText(e)} · {e.ActionsPerformed} {_text.Clicks(e.ActionsPerformed)}");
 
         if (e.Reason == StopReason.Error)
@@ -614,7 +628,23 @@ public sealed class UiBridge : IDisposable
         _channel.Post(() => Send(new { type = "pointAdded", x = e.Point.X, y = e.Point.Y }));
 
     private void OnStartRejected(object? sender, ProfileValidationException e) =>
-        _channel.Post(() => Toast(Describe(e), error: true));
+        _channel.Post(() => Toast(Describe(e, Current.Script), error: true));
+
+    /// <summary>
+    /// Blocks can change far faster than the page can draw them, so this posts one flush at a
+    /// time, which sends whichever block is current by the time it runs.
+    /// </summary>
+    private void OnBlockStarted(object? sender, BlockStartedEventArgs e)
+    {
+        if (Interlocked.Exchange(ref _blockFlushPending, 1) == 0)
+        {
+            _channel.Post(() =>
+            {
+                Interlocked.Exchange(ref _blockFlushPending, 0);
+                SendBlock(_host.Engine.CurrentBlock);
+            });
+        }
+    }
 
     private void OnHotkeyTriggered(object? sender, HotkeyEventArgs e)
     {
@@ -636,6 +666,49 @@ public sealed class UiBridge : IDisposable
         name = Current.Name,
         data = ProfileMapper.ToDto(Current),
         dirty = IsDirty,
+        issues = TrackIssues(),
+    };
+
+    /// <summary>The current profile's problems, remembered as the last the page was told about.</summary>
+    private List<IssueDto> TrackIssues()
+    {
+        var script = Current.Script;
+        var issues = ProfileValidator.Validate(Current)
+            .Select(e => ScriptTexts.Issue(e, ScriptTexts.Message(e, script) ?? Describe(new[] { e })))
+            .ToList();
+
+        _sentIssues = JsonSerializer.Serialize(issues, Json);
+        return issues;
+    }
+
+    /// <summary>After an edit: tells the page about its problems, when they changed.</summary>
+    private void SendIssuesIfChanged()
+    {
+        var sent = _sentIssues;
+        var issues = TrackIssues();
+        if (_sentIssues != sent)
+        {
+            Send(new { type = "issues", issues });
+        }
+    }
+
+    private void SendBlock(ScriptLocation? location)
+    {
+        if (ReferenceEquals(location, _sentBlock))
+        {
+            return;
+        }
+
+        _sentBlock = location;
+        Send(new { type = "block", block = BlockPayload(location) });
+    }
+
+    private static object? BlockPayload(ScriptLocation? location) => location is null ? null : new
+    {
+        id = location.BlockId,
+        pass = location.Pass,
+        passes = location.Passes,
+        loops = location.Loops.Select(l => new { id = l.BlockId, iteration = l.Iteration, count = l.Count }),
     };
 
     private void SendProfile() => Send(new
@@ -662,6 +735,7 @@ public sealed class UiBridge : IDisposable
             clicks,
             elapsedMs = (long)_runTime.Elapsed.TotalMilliseconds,
             pointIndex = NextPointIndex(clicks),
+            block = BlockPayload(engine.CurrentBlock),
         };
     }
 
@@ -670,6 +744,11 @@ public sealed class UiBridge : IDisposable
     /// <summary>Index into the route of the point the next click goes to, or -1.</summary>
     private int NextPointIndex(long actions)
     {
+        if (Current.Kind == ProfileKind.Script)
+        {
+            return -1;
+        }
+
         var route = Current.Target.Route;
         var enabled = Enumerable.Range(0, route.Count).Where(i => route[i].Enabled).ToArray();
         return enabled.Length == 0 ? -1 : enabled[(int)(actions % enabled.Length)];
@@ -723,12 +802,21 @@ public sealed class UiBridge : IDisposable
         _ => _text.StopUser,
     };
 
-    private string Describe(ProfileValidationException exception) => Describe(exception.Errors, _text);
+    private string Describe(ProfileValidationException exception, ScriptSettings? script = null) =>
+        Describe(exception.Errors, _text, script);
 
-    private string Describe(IReadOnlyList<ValidationError> errors) => Describe(errors, _text);
+    private string Describe(IReadOnlyList<ValidationError> errors, ScriptSettings? script = null) =>
+        Describe(errors, _text, script);
 
-    /// <summary>The first validation problem, in the interface's words where there are some.</summary>
-    public static string Describe(IReadOnlyList<ValidationError> errors, UiText text)
+    /// <summary>
+    /// The first validation problem, in the interface's words where there are some. A problem
+    /// in a script block names the block, which is why the script is wanted.
+    /// </summary>
+    public static string Describe(ProfileValidationException exception, UiText text, ScriptSettings? script = null) =>
+        Describe(exception.Errors, text, script);
+
+    /// <inheritdoc cref="Describe(ProfileValidationException, UiText, ScriptSettings?)"/>
+    public static string Describe(IReadOnlyList<ValidationError> errors, UiText text, ScriptSettings? script = null)
     {
         ArgumentNullException.ThrowIfNull(errors);
         ArgumentNullException.ThrowIfNull(text);
@@ -739,6 +827,11 @@ public sealed class UiBridge : IDisposable
         }
 
         var error = errors[0];
+        if (ScriptTexts.Describe(error, script) is { } scriptProblem)
+        {
+            return scriptProblem;
+        }
+
         return error.Path switch
         {
             "Target.Route" => text.NeedsPoint,

@@ -10,16 +10,21 @@ public sealed class ClickerProfile
     /// <summary>
     /// The schema version written by this build. Version 1 described the action as a single
     /// button or key; version 2 replaced that with <see cref="ActionSettings.Inputs"/>;
-    /// version 3 moved the press length from the action onto each input
-    /// (<see cref="InputChord.PressMs"/>) and added holding inputs down.
+    /// version 3 added <see cref="Kind"/> and <see cref="Script"/>. Older files are clicker
+    /// profiles and read as such, with an empty script. Version 4 moved the press length from
+    /// the action onto each input (<see cref="InputChord.PressMs"/>) and added holding inputs
+    /// down.
     /// </summary>
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 
     /// <summary>Schema version, so future readers can migrate old files.</summary>
     public int Version { get; set; } = CurrentVersion;
 
     /// <summary>Profile name; also the file name used by the JSON profile store.</summary>
     public string Name { get; set; } = "Default";
+
+    /// <summary>A clicker, or a script of blocks (<see cref="Script"/>).</summary>
+    public ProfileKind Kind { get; set; } = ProfileKind.Clicker;
 
     /// <summary>Toggle (interval) or hold-to-click.</summary>
     public ClickMode Mode { get; set; } = ClickMode.Toggle;
@@ -42,11 +47,18 @@ public sealed class ClickerProfile
 
     public SafetySettings Safety { get; set; } = new();
 
+    /// <summary>
+    /// The blocks a <see cref="ProfileKind.Script"/> profile runs. A clicker keeps its script
+    /// too, so switching the kind back and forth loses nothing.
+    /// </summary>
+    public ScriptSettings Script { get; set; } = new();
+
     /// <summary>A deep copy, so a UI can edit a draft without disturbing a running engine.</summary>
     public ClickerProfile Clone() => new()
     {
         Version = Version,
         Name = Name,
+        Kind = Kind,
         Mode = Mode,
         Action = Action.Clone(),
         Interval = Interval.Clone(),
@@ -57,6 +69,7 @@ public sealed class ClickerProfile
         Directional = Directional.Clone(),
         Hotkeys = Hotkeys.Clone(),
         Safety = Safety.Clone(),
+        Script = Script?.Clone() ?? new(),
     };
 
     /// <summary>

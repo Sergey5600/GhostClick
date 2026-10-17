@@ -15,7 +15,7 @@ namespace ClickerEngine.Core.Planning;
 /// An infinite run yields an infinite sequence; the engine is what stops enumerating.
 /// </para>
 /// </summary>
-public sealed class ActionPlanner
+public sealed class ActionPlanner : IRunPlanner
 {
     private readonly ClickerProfile _profile;
     private readonly ICursorProvider _cursor;
@@ -239,7 +239,7 @@ public sealed class ActionPlanner
 
         var heldModifiers = _profile.Action.HeldWhileRunning.Aggregate(KeyModifiers.None, (all, i) => all | i.Modifiers);
         var modifierFlags = entries.Aggregate(KeyModifiers.None, (all, i) => all | i.Modifiers) & ~heldModifiers;
-        var modifiers = EnumerateModifiers(modifierFlags).ToArray();
+        var modifiers = PlanSteps.Modifiers(modifierFlags);
 
         foreach (var modifier in modifiers)
         {
@@ -259,19 +259,9 @@ public sealed class ActionPlanner
             }
 
             var key = pressed[press.Input].Key;
-            if (press.Down)
-            {
-                yield return key.TryGetMouseButton(out var button)
-                    ? EngineStep.MouseDown(button)
-                    : EngineStep.KeyDown(key);
-            }
-            else
-            {
-                bool completes = e == events.Count - 1;
-                yield return key.TryGetMouseButton(out var button)
-                    ? EngineStep.MouseUp(button, completesAction: completes)
-                    : EngineStep.KeyUp(key, completesAction: completes);
-            }
+            yield return press.Down
+                ? PlanSteps.Down(key)
+                : PlanSteps.Up(key, completesAction: e == events.Count - 1);
         }
 
         // Release modifiers in reverse order, the way a human would.
@@ -316,7 +306,7 @@ public sealed class ActionPlanner
                 continue;
             }
 
-            long up = NextPressDuration(inputs[i]);
+            long up = PlanSteps.PressDuration(inputs[i], _profile.Action, _random);
             events.Add(new PressEvent(up, 0, false, i));
             firstClicksUp = Math.Max(firstClicksUp, up);
             clicks.Add(i);
@@ -329,7 +319,7 @@ public sealed class ActionPlanner
             foreach (int i in clicks)
             {
                 events.Add(new PressEvent(second, 1, true, i));
-                events.Add(new PressEvent(second + NextPressDuration(inputs[i]), 1, false, i));
+                events.Add(new PressEvent(second + PlanSteps.PressDuration(inputs[i], _profile.Action, _random), 1, false, i));
             }
         }
 
@@ -344,35 +334,8 @@ public sealed class ActionPlanner
         return events;
     }
 
-    /// <summary>How long the next click of <paramref name="input"/> is held: its press time, or a random time around it.</summary>
-    private long NextPressDuration(InputChord input)
-    {
-        int press = Math.Max(0, input.PressMs);
-        var action = _profile.Action;
-        if (!action.RandomizeHoldDuration || press == 0)
-        {
-            return press;
-        }
-
-        int spread = (int)Math.Round(press * Math.Clamp(action.PressSpreadPercent, 0, 100) / 100.0);
-        return _random.NextInt(press - spread, press + spread);
-    }
-
     /// <summary>Interpolated cursor travel from wherever the cursor is now to a target.</summary>
-    private IEnumerable<EngineStep> MoveSteps(ScreenPoint target)
-    {
-        var from = _cursor.GetCursorPosition();
-
-        foreach (var sample in MotionPlanner.Plan(from, target, _profile.Movement, _profile.Jitter, _random))
-        {
-            if (sample.Delay > TimeSpan.Zero)
-            {
-                yield return EngineStep.Wait(sample.Delay);
-            }
-
-            yield return EngineStep.MoveTo(sample.Position);
-        }
-    }
+    private IEnumerable<EngineStep> MoveSteps(ScreenPoint target) => PlanSteps.Travel(_cursor, target, _profile, _random);
 
     /// <summary>The delay before the next action, with range randomization and timing jitter.</summary>
     private TimeSpan NextInterval()
@@ -422,28 +385,4 @@ public sealed class ActionPlanner
     /// <param name="Down">Press or release.</param>
     /// <param name="Input">Index into the tick's inputs.</param>
     private readonly record struct PressEvent(long Time, int Round, bool Down, int Input);
-
-    /// <summary>The virtual keys for a set of modifier flags, in the order they are pressed.</summary>
-    internal static IEnumerable<VirtualKey> EnumerateModifiers(KeyModifiers modifiers)
-    {
-        if (modifiers.HasFlag(KeyModifiers.Control))
-        {
-            yield return VirtualKey.LeftControl;
-        }
-
-        if (modifiers.HasFlag(KeyModifiers.Alt))
-        {
-            yield return VirtualKey.LeftAlt;
-        }
-
-        if (modifiers.HasFlag(KeyModifiers.Shift))
-        {
-            yield return VirtualKey.LeftShift;
-        }
-
-        if (modifiers.HasFlag(KeyModifiers.Windows))
-        {
-            yield return VirtualKey.LeftWindows;
-        }
-    }
 }

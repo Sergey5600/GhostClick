@@ -1,4 +1,5 @@
 using ClickerEngine.Core.Configuration;
+using ClickerEngine.Core.Planning;
 
 namespace ClickerEngine.Core.Engine;
 
@@ -118,4 +119,13 @@ public sealed class ActionExecutedEventArgs : EventArgs
     public ScreenPoint Position { get; }
 
     public ActionKind Kind { get; }
+}
+
+/// <summary>Raised when a script run starts executing a block, so a UI can highlight it.</summary>
+public sealed class BlockStartedEventArgs : EventArgs
+{
+    public BlockStartedEventArgs(ScriptLocation location) => Location = location;
+
+    /// <summary>The block, the pass of the script and the iteration of every repeat around it.</summary>
+    public ScriptLocation Location { get; }
 }

@@ -19,6 +19,7 @@ public sealed class UiText
         ProfileCreated = n => $"Профиль «{n}» создан",
         ProfileCopied = (n, source) => $"Профиль «{n}» создан из «{source}»",
         NewProfileName = i => $"Профиль {i}",
+        NewScriptName = i => $"Сценарий {i}",
         CopyName = (source, i) => i == 1 ? $"{source} (копия)" : $"{source} (копия {i})",
         SaveFailed = "Не удалось сохранить профиль: ",
         LoadFailed = (n, error) => $"Не удалось загрузить профиль «{n}»: {error}",
@@ -27,6 +28,7 @@ public sealed class UiText
         LanguageNotSaved = "Не удалось запомнить язык: ",
         Started = "Старт",
         NoActions = "нет действий",
+        ScriptSummary = n => $"сценарий, {n} {Plural(n, "блок", "блока", "блоков")}",
         Paused = "Пауза",
         Resumed = "Продолжено",
         Clicks = n => Plural(n, "клик", "клика", "кликов"),
@@ -64,6 +66,7 @@ public sealed class UiText
         ProfileCreated = n => $"Profile “{n}” created",
         ProfileCopied = (n, source) => $"Profile “{n}” created from “{source}”",
         NewProfileName = i => $"Profile {i}",
+        NewScriptName = i => $"Script {i}",
         CopyName = (source, i) => i == 1 ? $"{source} (copy)" : $"{source} (copy {i})",
         SaveFailed = "Couldn’t save the profile: ",
         LoadFailed = (n, error) => $"Couldn’t load profile “{n}”: {error}",
@@ -72,6 +75,7 @@ public sealed class UiText
         LanguageNotSaved = "Couldn’t remember the language: ",
         Started = "Start",
         NoActions = "no actions",
+        ScriptSummary = n => $"script, {n} {(n == 1 ? "block" : "blocks")}",
         Paused = "Pause",
         Resumed = "Resumed",
         Clicks = n => n == 1 ? "click" : "clicks",
@@ -126,6 +130,9 @@ public sealed class UiText
     /// <summary>The name of a new profile, numbered from the count of profiles.</summary>
     public required Func<int, string> NewProfileName { get; init; }
 
+    /// <summary>The name of a new script, numbered from the count of profiles.</summary>
+    public required Func<int, string> NewScriptName { get; init; }
+
     /// <summary>The name of the <c>i</c>-th copy of a profile.</summary>
     public required Func<string, int, string> CopyName { get; init; }
 
@@ -142,6 +149,9 @@ public sealed class UiText
     public required string Started { get; init; }
 
     public required string NoActions { get; init; }
+
+    /// <summary>What a script run presses, for the start line of the log: its number of blocks.</summary>
+    public required Func<int, string> ScriptSummary { get; init; }
 
     public required string Paused { get; init; }
 
