@@ -224,6 +224,32 @@ input:focus-visible {
 
 .spacer { flex: 1; }
 
+.lang-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 38px;
+  padding: 2px;
+  box-sizing: border-box;
+  border-radius: 19px;
+  background: var(--surface);
+}
+
+.lang-switch button {
+  height: 34px;
+  min-width: 44px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 17px;
+  background: transparent;
+  color: var(--text-3);
+  font: 600 13px var(--ui-control);
+  cursor: pointer;
+  transition: background 160ms;
+}
+
+.lang-switch button.on { background: var(--active); color: var(--text); }
+
 .pill-button {
   background: var(--surface);
   border: none;
@@ -395,6 +421,120 @@ input:focus-visible {
 }
 
 .mouse-label .name { font-weight: 500; line-height: 1; font-family: var(--geist); }
+
+/* «Как нажимать»: over the hovered action, centred, 14 px above it. */
+.popover {
+  position: absolute;
+  z-index: 30;
+  transform: translate(-50%, calc(-100% - 14px));
+  width: 360px;
+  padding: 18px;
+  box-sizing: border-box;
+  border-radius: 20px;
+  background: rgba(44, 44, 46, 0.96);
+  backdrop-filter: blur(30px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65), 0 0 0 0.5px rgba(255, 255, 255, 0.09);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-family: var(--ui-control);
+  color: var(--text);
+}
+
+/* The gap down to the key belongs to the popover, so the pointer can cross it without
+   passing over the row above, which would switch to that key's popover. */
+.popover::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 14px;
+}
+
+.pop-header { display: flex; align-items: center; gap: 12px; }
+
+.pop-key {
+  height: 34px;
+  min-width: 34px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border-radius: 17px;
+  background: var(--blue);
+  color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 15px/1 var(--geist);
+  white-space: nowrap;
+}
+
+.pop-key span { display: block; line-height: 1; text-box: trim-both cap alphabetic; }
+.pop-title { font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
+.pop-segments { display: flex; padding: 2px; border-radius: 10px; background: rgba(118, 118, 128, 0.24); }
+
+.pop-segment {
+  flex: 1;
+  height: 34px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  font: 600 14px var(--ui-control);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 160ms;
+}
+
+.pop-block { display: flex; flex-direction: column; gap: 8px; }
+.pop-block.hold { gap: 12px; }
+.pop-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pop-label { font-size: 15px; white-space: nowrap; }
+.pop-sub { font-size: 12px; line-height: 1.4; color: var(--text-3); }
+.pop-stepper { display: flex; align-items: center; gap: 6px; }
+
+.pop-step {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(118, 118, 128, 0.24);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.pop-step:hover { background: rgba(118, 118, 128, 0.4); }
+.pop-step svg { display: block; fill: none; stroke: var(--text); stroke-width: 2.6; stroke-linecap: round; }
+
+.pop-number {
+  width: 64px;
+  height: 32px;
+  background: rgba(118, 118, 128, 0.24);
+  color: var(--text);
+  border: none;
+  border-radius: 8px;
+  padding: 0 8px;
+  font: 600 15px var(--geist);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.pop-unit { font-size: 13px; color: var(--text-3); padding-left: 4px; }
+.pop-separator { height: 0.5px; background: rgba(255, 255, 255, 0.12); margin: 0 -18px; }
+
+.pop-remove {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: #ff453a;
+  font: 500 14px var(--ui-control);
+  cursor: pointer;
+}
 
 /* ------------------------------------------------------------------ dock */
 
