@@ -81,14 +81,36 @@ public class ConfigurationTests
     }
 
     [Fact]
-    public void Validator_RejectsAnInvertedHoldRange()
+    public void Validator_RejectsANegativePress()
     {
         var profile = ClickerProfile.CreateDefault();
-        profile.Action.RandomizeHoldDuration = true;
-        profile.Action.MinHoldDurationMs = 90;
-        profile.Action.MaxHoldDurationMs = 30;
+        profile.Action.Inputs = [InputChord.Mouse(MouseButton.Left), new InputChord(VirtualKey.E) { PressMs = -1 }];
 
-        Assert.Contains(ProfileValidator.Validate(profile), e => e.Path == "Action.MaxHoldDurationMs");
+        Assert.Contains(ProfileValidator.Validate(profile), e => e.Path == "Action.Inputs[1].PressMs");
+    }
+
+    [Fact]
+    public void Validator_RejectsATimedHoldOfNothing()
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Action.Inputs = [new InputChord(VirtualKey.W) { Mode = PressMode.Hold, Hold = HoldMode.Timed, HoldMs = 0 }];
+
+        Assert.Contains(ProfileValidator.Validate(profile), e => e.Path == "Action.Inputs[0].HoldMs");
+
+        // Held for the whole run, the hold time is not used.
+        profile.Action.Inputs[0].Hold = HoldMode.WhileRunning;
+        Assert.Empty(ProfileValidator.Validate(profile));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(101)]
+    public void Validator_RejectsAPressSpreadOutsideAPercentage(int percent)
+    {
+        var profile = ClickerProfile.CreateDefault();
+        profile.Action.PressSpreadPercent = percent;
+
+        Assert.Contains(ProfileValidator.Validate(profile), e => e.Path == "Action.PressSpreadPercent");
     }
 
     [Fact]

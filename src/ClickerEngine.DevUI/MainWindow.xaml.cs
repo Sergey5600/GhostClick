@@ -428,7 +428,7 @@ public partial class MainWindow : Window
             ActionCtrlBox.IsChecked = primary.Modifiers.HasFlag(KeyModifiers.Control);
             ActionAltBox.IsChecked = primary.Modifiers.HasFlag(KeyModifiers.Alt);
             ActionShiftBox.IsChecked = primary.Modifiers.HasFlag(KeyModifiers.Shift);
-            HoldDurationBox.Text = Text(profile.Action.HoldDurationMs);
+            HoldDurationBox.Text = Text(primary.PressMs);
             DoubleGapBox.Text = Text(profile.Action.DoubleClickGapMs);
 
             DelayBox.Text = Text(profile.Interval.DelayMs);
@@ -508,6 +508,16 @@ public partial class MainWindow : Window
             ? InputChord.Mouse(Selected(MouseButtonBox, MouseButton.Left), actionModifiers)
             : new InputChord(Selected(ActionKeyBox, VirtualKey.Space), actionModifiers);
 
+        // How it is pressed is set in the main UI; the harness only edits the press length.
+        if (profile.Action.Inputs.FirstOrDefault() is { } previous)
+        {
+            primary.Mode = previous.Mode;
+            primary.Hold = previous.Hold;
+            primary.HoldMs = previous.HoldMs;
+        }
+
+        primary.PressMs = ParseInt(HoldDurationBox, profile.Action.Inputs.FirstOrDefault()?.PressMs ?? InputChord.DefaultPressMs);
+
         if (profile.Action.Inputs.Count == 0)
         {
             profile.Action.Inputs.Add(primary);
@@ -518,7 +528,6 @@ public partial class MainWindow : Window
         }
 
         profile.Action.ClickType = Selected(ClickTypeBox, profile.Action.ClickType);
-        profile.Action.HoldDurationMs = ParseInt(HoldDurationBox, profile.Action.HoldDurationMs);
         profile.Action.DoubleClickGapMs = ParseInt(DoubleGapBox, profile.Action.DoubleClickGapMs);
 
         profile.Interval.DelayMs = ParseInt(DelayBox, profile.Interval.DelayMs);

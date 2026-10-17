@@ -16,6 +16,12 @@ namespace ClickerEngine.Core.Engine;
 /// later without touching this class.
 /// </para>
 /// <para>
+/// Inputs held for the whole run (<see cref="InputChord.IsHeldWhileRunning"/>) are the
+/// engine's own, not the plan's: it presses them when the first action may go, releases them
+/// while paused or while the target window is not acceptable, and always releases them when
+/// the run ends, however it ends.
+/// </para>
+/// <para>
 /// Events are raised on the engine's own run thread. A UI must marshal them itself.
 /// </para>
 /// </summary>
@@ -28,6 +34,13 @@ public sealed class AutoClickerEngine : IDisposable
     private readonly IWindowProbe? _windowProbe;
     private readonly object _sync = new();
     private readonly ManualResetEventSlim _pauseGate = new(initialState: true);
+
+    /// <summary>
+    /// Cancelled by <see cref="Pause"/>, so a run that holds inputs for the whole run wakes
+    /// from a wait between actions and lets go of them at once. The run thread replaces it
+    /// once it has seen the pause through.
+    /// </summary>
+    private CancellationTokenSource _pauseSignal = new();
 
     private ClickerProfile _profile = ClickerProfile.CreateDefault();
     private CancellationTokenSource? _cancellation;
@@ -159,6 +172,7 @@ public sealed class AutoClickerEngine : IDisposable
             _cancellation = cancellation;
             _pendingStopReason = StopReason.User;
             _pauseGate.Set();
+            ResetPauseSignalLocked();
             Interlocked.Exchange(ref _currentRunActions, 0);
 
             thread = new Thread(() => RunLoop(snapshot, cancellation.Token))
@@ -244,7 +258,11 @@ public sealed class AutoClickerEngine : IDisposable
         }
     }
 
-    /// <summary>Suspends a running session at the next step boundary.</summary>
+    /// <summary>
+    /// Suspends a running session once the current action is done, so a pause never leaves a
+    /// click or a timed hold pressed. Inputs held for the whole run are released as soon as
+    /// the run is between actions, and pressed again on <see cref="Resume"/>.
+    /// </summary>
     public bool Pause()
     {
         EngineStateChangedEventArgs? transition;
@@ -257,6 +275,7 @@ public sealed class AutoClickerEngine : IDisposable
             }
 
             _pauseGate.Reset();
+            _pauseSignal.Cancel();
             SetStateLocked(EngineState.Paused, out transition);
         }
 
@@ -311,6 +330,11 @@ public sealed class AutoClickerEngine : IDisposable
         Stop(StopReason.Disposed);
         _pauseGate.Dispose();
         _cancellation?.Dispose();
+
+        lock (_sync)
+        {
+            _pauseSignal.Dispose();
+        }
     }
 
     private static IScreenGeometry ResolveDefaultScreen() => OperatingSystem.IsWindows()
@@ -324,7 +348,7 @@ public sealed class AutoClickerEngine : IDisposable
 
         var runStart = _clock.Elapsed;
         var startCursor = _injector.GetCursorPosition();
-        var context = new RunContext(startCursor);
+        var context = new RunContext(startCursor, profile.Action.HeldWhileRunning);
 
         // Ask Windows for a 1 ms timer tick so short waits actually land near where we
         // asked. Released as soon as the run ends.
@@ -363,7 +387,9 @@ public sealed class AutoClickerEngine : IDisposable
             Statistics.RecordRunTime(duration);
             Interlocked.Exchange(ref _currentRunActions, context.Actions);
 
+            // What the interrupted action pressed comes up first, then what the run held around it.
             TryReleaseHeldInput(profile, context);
+            ReleaseHeldWhileRunning(context, bestEffort: true);
             TryRestoreCursor(profile, context, startCursor);
 
             EngineStateChangedEventArgs? transition;
@@ -395,7 +421,8 @@ public sealed class AutoClickerEngine : IDisposable
         CancellationToken token,
         out StopReason breach)
     {
-        bool startsAction = !context.InAction && step.Kind is EngineStepKind.MouseDown or EngineStepKind.KeyDown;
+        bool startsAction = !context.InAction &&
+            step.Kind is EngineStepKind.MouseDown or EngineStepKind.KeyDown or EngineStepKind.Tick;
         bool held = false;
         long target = 0;
         long settling = 0;
@@ -404,7 +431,13 @@ public sealed class AutoClickerEngine : IDisposable
         while (true)
         {
             token.ThrowIfCancellationRequested();
-            _pauseGate.Wait(token);
+
+            // An action that has started is finished first: a pause between its press and its
+            // release would leave the button down for as long as the pause lasts.
+            if (!context.InAction && !_pauseGate.IsSet)
+            {
+                SitOutPause(profile, context, token);
+            }
 
             if (TryGetLimitBreach(profile, runStart, context, out breach))
             {
@@ -439,6 +472,9 @@ public sealed class AutoClickerEngine : IDisposable
                 held = true;
                 settling = 0;
 
+                // Held inputs must not keep going into a window the actions may not reach.
+                ReleaseHeldWhileRunning(context);
+
                 // Whatever the user does with the mouse while we wait is not a deviation from
                 // our plan; the reference point is taken again once the action can go ahead.
                 if (profile.Target.Mode == TargetMode.CurrentCursor)
@@ -456,6 +492,10 @@ public sealed class AutoClickerEngine : IDisposable
         {
             context.LockedWindow = target;
         }
+
+        // The inputs held for the run go down with the first action, and again with the first
+        // action after anything made the run let go of them.
+        PressHeldWhileRunning(context);
 
         // Clicking at the cursor: the user aims, then lets go of the mouse. The first action
         // marks where it was left, so moving it later counts as taking it back.
@@ -511,7 +551,15 @@ public sealed class AutoClickerEngine : IDisposable
         switch (step.Kind)
         {
             case EngineStepKind.Wait:
-                _clock.Wait(step.Delay, token);
+                if (context.InAction || context.Held.Length == 0)
+                {
+                    _clock.Wait(step.Delay, token);
+                }
+                else
+                {
+                    WaitBetweenActions(step.Delay, profile, context, token);
+                }
+
                 break;
 
             case EngineStepKind.MoveTo:
@@ -547,6 +595,10 @@ public sealed class AutoClickerEngine : IDisposable
 
                 break;
 
+            case EngineStepKind.Tick:
+                // Nothing to press: every input is held for the run. It still counts.
+                break;
+
             default:
                 throw new NotSupportedException($"Unknown step kind '{step.Kind}'.");
         }
@@ -565,6 +617,174 @@ public sealed class AutoClickerEngine : IDisposable
             context.Actions,
             context.HasCommandedMove ? context.LastCommandedPosition : _injector.GetCursorPosition(),
             profile.Action.UsesMouse ? ActionKind.Mouse : ActionKind.Keyboard));
+    }
+
+    /// <summary>
+    /// A wait between actions in a run that holds inputs: a pause in the middle of it releases
+    /// them at once rather than when the wait is over, and resuming presses them again where
+    /// that is allowed. The wait itself then carries on for whatever is left of it.
+    /// </summary>
+    private void WaitBetweenActions(TimeSpan delay, ClickerProfile profile, RunContext context, CancellationToken token)
+    {
+        var end = _clock.Elapsed + delay;
+
+        while (true)
+        {
+            var remaining = end - _clock.Elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                token.ThrowIfCancellationRequested();
+                return;
+            }
+
+            using (var wake = CancellationTokenSource.CreateLinkedTokenSource(token, PauseToken()))
+            {
+                try
+                {
+                    _clock.Wait(remaining, wake.Token);
+                    return;
+                }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                {
+                    // Paused; handled below, once the linked source is gone.
+                }
+            }
+
+            SitOutPause(profile, context, token);
+        }
+    }
+
+    /// <summary>
+    /// Releases the inputs held for the run, blocks until the run is resumed (or stopped),
+    /// then presses them again if the target window allows it. If it does not, the next
+    /// action waits for the window and presses them then.
+    /// </summary>
+    private void SitOutPause(ClickerProfile profile, RunContext context, CancellationToken token)
+    {
+        ReleaseHeldWhileRunning(context);
+        _pauseGate.Wait(token);
+
+        lock (_sync)
+        {
+            ResetPauseSignalLocked();
+        }
+
+        if (context.Held.Length > 0 && context.HeldEverPressed && TryGetTargetWindow(profile, context, out _))
+        {
+            PressHeldWhileRunning(context);
+        }
+    }
+
+    private CancellationToken PauseToken()
+    {
+        lock (_sync)
+        {
+            return _pauseSignal.Token;
+        }
+    }
+
+    /// <summary>
+    /// Arms a fresh pause signal once the last pause has been seen through. While the run is
+    /// still paused the cancelled one stays, so the next wait does not miss that pause.
+    /// Must be called under <see cref="_sync"/>.
+    /// </summary>
+    private void ResetPauseSignalLocked()
+    {
+        if (_pauseSignal.IsCancellationRequested && _state != EngineState.Paused)
+        {
+            _pauseSignal.Dispose();
+            _pauseSignal = new CancellationTokenSource();
+        }
+    }
+
+    /// <summary>Presses the inputs held for the run, modifiers first, unless they are already down.</summary>
+    private void PressHeldWhileRunning(RunContext context)
+    {
+        if (context.HeldDown || context.Held.Length == 0)
+        {
+            return;
+        }
+
+        // Marked first, so a press that fails half way still has the rest released.
+        context.HeldDown = true;
+        context.HeldEverPressed = true;
+
+        foreach (var modifier in context.HeldModifiers)
+        {
+            context.HeldKeys.Add(modifier);
+            _injector.KeyDown(modifier);
+        }
+
+        foreach (var input in context.Held)
+        {
+            if (input.Key.TryGetMouseButton(out var button))
+            {
+                context.HeldButtons.Add(button);
+                _injector.MouseButtonDown(button);
+            }
+            else
+            {
+                context.HeldKeys.Add(input.Key);
+                _injector.KeyDown(input.Key);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Releases the inputs held for the run in reverse order, then their modifiers. When the
+    /// run is ending (<paramref name="bestEffort"/>) a failing release does not stop the rest.
+    /// </summary>
+    private void ReleaseHeldWhileRunning(RunContext context, bool bestEffort = false)
+    {
+        if (!context.HeldDown)
+        {
+            return;
+        }
+
+        context.HeldDown = false;
+
+        for (int i = context.Held.Length - 1; i >= 0; i--)
+        {
+            var key = context.Held[i].Key;
+            if (key.TryGetMouseButton(out var button))
+            {
+                if (context.HeldButtons.Remove(button))
+                {
+                    Release(() => _injector.MouseButtonUp(button));
+                }
+            }
+            else if (context.HeldKeys.Remove(key))
+            {
+                Release(() => _injector.KeyUp(key));
+            }
+        }
+
+        for (int i = context.HeldModifiers.Length - 1; i >= 0; i--)
+        {
+            var modifier = context.HeldModifiers[i];
+            if (context.HeldKeys.Remove(modifier))
+            {
+                Release(() => _injector.KeyUp(modifier));
+            }
+        }
+
+        void Release(Action release)
+        {
+            if (!bestEffort)
+            {
+                release();
+                return;
+            }
+
+            try
+            {
+                release();
+            }
+            catch (Exception)
+            {
+                // Best effort: the run is already ending.
+            }
+        }
     }
 
     /// <summary>Checks the run against the safety limits before executing the next step.</summary>
@@ -607,11 +827,31 @@ public sealed class AutoClickerEngine : IDisposable
 
     /// <summary>
     /// A run cancelled between a press and its release would otherwise leave a button or key
-    /// stuck down for the whole system. Release anything still held.
+    /// stuck down for the whole system. Release anything an action still holds; the inputs
+    /// held for the whole run are left to <see cref="ReleaseHeldWhileRunning"/>.
     /// </summary>
     private void TryReleaseHeldInput(ClickerProfile profile, RunContext context)
     {
-        foreach (var button in context.HeldButtons.ToArray())
+        var keepButtons = new HashSet<MouseButton>();
+        var keepKeys = new HashSet<VirtualKey>();
+        if (context.HeldDown)
+        {
+            foreach (var input in context.Held)
+            {
+                if (input.Key.TryGetMouseButton(out var held))
+                {
+                    keepButtons.Add(held);
+                }
+                else
+                {
+                    keepKeys.Add(input.Key);
+                }
+            }
+
+            keepKeys.UnionWith(context.HeldModifiers);
+        }
+
+        foreach (var button in context.HeldButtons.Where(b => !keepButtons.Contains(b)).ToArray())
         {
             try
             {
@@ -621,9 +861,11 @@ public sealed class AutoClickerEngine : IDisposable
             {
                 // Best effort: the run is already ending.
             }
+
+            context.HeldButtons.Remove(button);
         }
 
-        foreach (var key in context.HeldKeys.ToArray())
+        foreach (var key in context.HeldKeys.Where(k => !keepKeys.Contains(k)).ToArray())
         {
             try
             {
@@ -633,10 +875,10 @@ public sealed class AutoClickerEngine : IDisposable
             {
                 // Best effort: the run is already ending.
             }
+
+            context.HeldKeys.Remove(key);
         }
 
-        context.HeldButtons.Clear();
-        context.HeldKeys.Clear();
         _ = profile;
     }
 
@@ -681,7 +923,28 @@ public sealed class AutoClickerEngine : IDisposable
     /// <summary>Mutable per-run bookkeeping, kept out of the engine's shared state.</summary>
     private sealed class RunContext
     {
-        public RunContext(ScreenPoint startCursor) => LastCommandedPosition = startCursor;
+        public RunContext(ScreenPoint startCursor, IReadOnlyList<InputChord> held)
+        {
+            LastCommandedPosition = startCursor;
+
+            // One physical key is held once, the way its first entry says.
+            Held = held.DistinctBy(i => i.Key).ToArray();
+            HeldModifiers = ActionPlanner
+                .EnumerateModifiers(Held.Aggregate(KeyModifiers.None, (all, i) => all | i.Modifiers))
+                .ToArray();
+        }
+
+        /// <summary>The inputs held down for the whole run.</summary>
+        public InputChord[] Held { get; }
+
+        /// <summary>The modifiers held around them.</summary>
+        public VirtualKey[] HeldModifiers { get; }
+
+        /// <summary>True while <see cref="Held"/> is pressed.</summary>
+        public bool HeldDown { get; set; }
+
+        /// <summary>True once <see cref="Held"/> has been pressed at least once this run.</summary>
+        public bool HeldEverPressed { get; set; }
 
         public long Actions { get; set; }
 

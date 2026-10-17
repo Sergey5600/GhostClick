@@ -9,9 +9,11 @@ public sealed class ClickerProfile
 {
     /// <summary>
     /// The schema version written by this build. Version 1 described the action as a single
-    /// button or key; version 2 replaced that with <see cref="ActionSettings.Inputs"/>.
+    /// button or key; version 2 replaced that with <see cref="ActionSettings.Inputs"/>;
+    /// version 3 moved the press length from the action onto each input
+    /// (<see cref="InputChord.PressMs"/>) and added holding inputs down.
     /// </summary>
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     /// <summary>Schema version, so future readers can migrate old files.</summary>
     public int Version { get; set; } = CurrentVersion;
