@@ -181,7 +181,7 @@ public sealed class MovementSettings
 /// <summary>
 /// Randomization applied to positions and timings so the emitted pattern is not perfectly
 /// periodic. Note that this changes the shape of the input stream only - it cannot defeat
-/// kernel-level anti-cheat (see README).
+/// kernel-level anti-cheat (see docs/DEVELOPMENT.md, «Совместимость с играми»).
 /// </summary>
 public sealed class JitterSettings
 {
