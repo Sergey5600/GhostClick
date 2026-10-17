@@ -9,6 +9,12 @@ namespace GhostClick.Bridge;
 /// </summary>
 public sealed class ProfileDto
 {
+    /// <summary>
+    /// <c>clicker</c> or <c>script</c>. Null - a page that predates scripts - leaves the kind
+    /// alone.
+    /// </summary>
+    public string? Kind { get; set; }
+
     public BindingsDto Bind { get; set; } = new();
 
     /// <summary>Everything pressed together on each tick.</summary>
@@ -49,6 +55,12 @@ public sealed class ProfileDto
 
     /// <summary>Largest position jitter in pixels; shown in a label, never written back.</summary>
     public int JitterPx { get; set; } = 3;
+
+    /// <summary>
+    /// The blocks a script runs. Sent for clickers too, so switching the kind keeps them; null
+    /// leaves the script alone.
+    /// </summary>
+    public ScriptDto? Script { get; set; }
 }
 
 /// <summary>The four hotkey slots; null means unassigned.</summary>
@@ -120,6 +132,7 @@ public static class ProfileMapper
 
         return new ProfileDto
         {
+            Kind = profile.Kind == ProfileKind.Script ? "script" : "clicker",
             Bind = new BindingsDto
             {
                 Toggle = ToDto(profile.Hotkeys.StartStop),
@@ -158,6 +171,7 @@ public static class ProfileMapper
                 ActiveWindowOnly = profile.Safety.ActiveWindowOnly,
             },
             JitterPx = Math.Max(profile.Jitter.MaxOffsetX, profile.Jitter.MaxOffsetY),
+            Script = ScriptMapper.ToDto(profile.Script ?? new ScriptSettings()),
         };
     }
 
@@ -169,6 +183,18 @@ public static class ProfileMapper
     {
         ArgumentNullException.ThrowIfNull(dto);
         ArgumentNullException.ThrowIfNull(profile);
+
+        profile.Kind = dto.Kind switch
+        {
+            "clicker" => ProfileKind.Clicker,
+            "script" => ProfileKind.Script,
+            _ => profile.Kind,
+        };
+
+        if (dto.Script is { } script)
+        {
+            ScriptMapper.Apply(script, profile.Script ??= new ScriptSettings());
+        }
 
         if (dto.Bind is { } bind)
         {
@@ -258,14 +284,19 @@ public static class ProfileMapper
     /// (<see cref="SafetySettings.MaxRunDurationSeconds"/>, ten minutes by default) is a safety
     /// net the interface never shows and would quietly end it - so the engine's copy drops the
     /// limit under an infinite repeat. The profile itself keeps its limit: switching to
-    /// «Бесконечно» and back to «N раз» must leave it exactly as it was.
+    /// «Бесконечно» and back to «N раз» must leave it exactly as it was. A script counts as
+    /// infinite when it can run until stopped: it repeats forever, or a «Повторить» inside does.
     /// </summary>
     public static ClickerProfile ToEngineProfile(ClickerProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
 
         var run = profile.Clone();
-        if (run.Repeat.Mode == RepeatMode.Infinite)
+        bool endless = run.Kind == ProfileKind.Script
+            ? run.Script.IsEndless
+            : run.Repeat.Mode == RepeatMode.Infinite;
+
+        if (endless)
         {
             run.Safety.MaxRunDurationSeconds = 0;
         }
