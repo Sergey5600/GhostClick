@@ -325,10 +325,24 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           cat > notes.md <<EOF
+          ## Installation
+
+          1. Download **GhostClick-Setup-${version}.exe** below, under Assets. If your browser warns that the file "isn't commonly downloaded", choose "Keep" in the download menu (and confirm once more if it asks again).
+          2. Run it. If Windows shows "Windows protected your PC", click **More info → Run anyway**: the installer isn't signed with a paid certificate, so Windows doesn't recognize it yet.
+          3. Keep clicking "Next", then click "Install". No administrator rights needed. If your Windows isn't in English, the installer is in Russian: "Далее" means Next and "Установить" means Install.
+
+          GhostClick appears in the Start menu and on the desktop. It needs 64-bit Windows 10 or 11; if the computer has no Microsoft Edge WebView2 component, the installer adds it for you.
+
+          A new version installs over the old one and keeps your profiles. To uninstall GhostClick, go to **Settings → Apps**.
+
+          The GhostClick interface is in Russian for now.
+
+          ---
+
           ## Установка
 
-          1. Скачайте **GhostClick-Setup-${version}.exe** ниже, в разделе Assets.
-          2. Запустите его. Если Windows покажет «Система Windows защитила ваш компьютер», нажмите **Подробнее → Выполнить в любом случае**: установщик не подписан платным сертификатом, поэтому Windows его пока не знает. Браузер тоже может предупредить, что такой файл скачивают редко, — тогда выберите в меню загрузки «Сохранить».
+          1. Скачайте **GhostClick-Setup-${version}.exe** ниже, в разделе Assets. Если браузер предупредит, что такой файл скачивают редко, выберите в меню загрузки «Сохранить» (и подтвердите, если он спросит ещё раз).
+          2. Запустите его. Если Windows покажет «Система Windows защитила ваш компьютер», нажмите **Подробнее → Выполнить в любом случае**: установщик не подписан платным сертификатом, поэтому Windows его пока не знает.
           3. Нажимайте «Далее», а в конце «Установить». Права администратора не нужны.
 
           GhostClick появится в меню «Пуск» и на рабочем столе. Нужна 64-битная Windows 10 или 11; если на компьютере нет компонента Microsoft Edge WebView2, установщик поставит его сам.
