@@ -13,7 +13,7 @@
       The release version. CI builds a release from a tag vX.Y.Z and refuses one that does not
       match this; every other build gets X.Y.Z-dev.<run>. The installer takes it from there.
     -->
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <Product>GhostClick</Product>
     <Description>GhostClick - автокликер</Description>
     <Copyright>GhostClick</Copyright>
