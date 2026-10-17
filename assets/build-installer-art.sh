@@ -48,6 +48,12 @@ done
 # The header icon sits on the white page header. Like build-icon.sh, it puts the plate's
 # edges on whole pixels: the room AppIcon.svg leaves around the plate for its shadow is
 # rounded down to whole pixels and the plate fills the rest.
+for expected in 'viewBox="40 16 1072 1072"' '<rect x="64" y="40" width="1024" height="1024"'; do
+    if ! grep -qF "$expected" "$here/AppIcon.svg"; then
+        echo "AppIcon.svg no longer has $expected; update the plate geometry in $0" >&2
+        exit 1
+    fi
+done
 for size in "${header_sizes[@]}"; do
     w=${size%x*}; h=${size#*x}
     icon=$(( w < h ? w : h ))
