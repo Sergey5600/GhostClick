@@ -241,6 +241,63 @@ public class ScriptEngineTests
     }
 
     [Fact]
+    public void AClickWhileAKeyIsHeld_StillWaitsForTheWindow()
+    {
+        // «Зажать Shift» opens an action that only its «Отпустить» closes; the click in between
+        // is a block of its own and must not slip past the gate inside it.
+        var injector = new RecordingInputInjector();
+        var probe = new FakeWindowProbe { UnderCursor = OwnWindow, Foreground = GameWindow };
+        using var engine = CreateEngine(injector, out var stopped, probe);
+        engine.Profile = Script(
+            new HoldBlock { Id = "shift", Input = new InputChord(VirtualKey.LeftShift) },
+            new PressBlock { Id = "click" },
+            new ReleaseBlock { Id = "unshift", Input = new InputChord(VirtualKey.LeftShift) });
+
+        engine.Start();
+        Assert.True(SpinUntil(() => engine.CurrentBlock?.BlockId == "click"));
+        Thread.Sleep(80);
+
+        Assert.Contains(injector.Events, e => e.Kind == InjectedEventKind.KeyDown && e.Key == VirtualKey.LeftShift);
+        Assert.DoesNotContain(injector.Events, e => e.Kind == InjectedEventKind.MouseDown);
+
+        probe.UnderCursor = GameWindow;
+        Assert.Equal(StopReason.Completed, WaitForStop(stopped).Reason);
+        Assert.Contains(injector.Events, e => e.Kind == InjectedEventKind.MouseDown);
+    }
+
+    [Fact]
+    public void AHeldKey_DoesNotLetLaterBlocksPastTheWindowGate()
+    {
+        // Every click of an endless repeat inside a held key passes the gate on its own.
+        var injector = new RecordingInputInjector();
+        var probe = new FakeWindowProbe { UnderCursor = GameWindow, Foreground = GameWindow };
+        using var engine = CreateEngine(injector, out var stopped, probe);
+        engine.Profile = Script(
+            new HoldBlock { Id = "walk", Input = new InputChord(VirtualKey.W) },
+            new RepeatBlock { Id = "r", Mode = RepeatMode.Infinite, Blocks = [new PressBlock { Id = "click" }] });
+
+        int Clicks() => injector.Events.Count(e => e.Kind == InjectedEventKind.MouseDown);
+
+        engine.Start();
+        Assert.True(SpinUntil(() => Clicks() >= 3));
+
+        probe.UnderCursor = OwnWindow;
+        Thread.Sleep(60);
+        int heldAt = Clicks();
+        Thread.Sleep(150);
+
+        Assert.Equal(heldAt, Clicks());
+        Assert.Equal(EngineState.Running, engine.State);
+
+        probe.UnderCursor = GameWindow;
+        Assert.True(SpinUntil(() => Clicks() > heldAt + 3));
+
+        engine.Stop();
+        WaitForStop(stopped);
+        Assert.Contains(injector.Events, e => e.Kind == InjectedEventKind.KeyUp && e.Key == VirtualKey.W);
+    }
+
+    [Fact]
     public void StopOnUserCursorMove_WatchesThePointTheScriptMovedTo()
     {
         var injector = new RecordingInputInjector(new ScreenPoint(100, 100));

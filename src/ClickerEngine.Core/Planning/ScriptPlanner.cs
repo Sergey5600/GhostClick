@@ -402,7 +402,7 @@ public sealed class ScriptPlanner : IRunPlanner
         /// <summary>Steps produced so far, pauses included.</summary>
         public long Steps { get; set; }
 
-        /// <summary>True after a step, until a «Ждать» or the automatic pause stands in for the gap.</summary>
+        /// <summary>True when a step ran last, so the next step wants the automatic pause first; a «Ждать» clears it.</summary>
         public bool PauseDue { get; set; }
 
         /// <summary>A «Стоп» was reached; nothing else runs.</summary>

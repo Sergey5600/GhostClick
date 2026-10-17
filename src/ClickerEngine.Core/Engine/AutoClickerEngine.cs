@@ -415,7 +415,12 @@ public sealed class AutoClickerEngine : IDisposable
         CancellationToken token,
         out StopReason breach)
     {
-        bool startsAction = !context.InAction && step.Kind is EngineStepKind.MouseDown or EngineStepKind.KeyDown;
+        // A clicker gates the first press of each action. A script gates the first press of
+        // each block: a «Зажать» leaves its action open until its «Отпустить», and the blocks
+        // in between must not ride through the gate on it.
+        bool startsAction = step.Device is null
+            ? !context.InAction && step.Kind is EngineStepKind.MouseDown or EngineStepKind.KeyDown
+            : !ReferenceEquals(step.Location, context.GatedBlock);
         bool held = false;
         long target = 0;
         long settling = 0;
@@ -471,6 +476,7 @@ public sealed class AutoClickerEngine : IDisposable
         }
 
         context.InAction = true;
+        context.GatedBlock = step.Location;
 
         if (profile.Safety.ActiveWindowOnly && context.LockedWindow == 0)
         {
@@ -504,8 +510,9 @@ public sealed class AutoClickerEngine : IDisposable
 
         // A script's press names its device; a clicker's whole action list decides for it.
         var action = profile.Action;
-        bool mouse = step.Device is { } device ? device == ActionKind.Mouse : action.UsesMouse;
-        bool keyboard = step.Device is { } kind ? kind == ActionKind.Keyboard : action.UsesKeyboard;
+        var device = step.Device;
+        bool mouse = device is null ? action.UsesMouse : device == ActionKind.Mouse;
+        bool keyboard = device is null ? action.UsesKeyboard : device == ActionKind.Keyboard;
         long clicked = mouse ? _windowProbe.GetWindowAt(_injector.GetCursorPosition()) : 0;
         long typed = keyboard ? _windowProbe.GetForegroundWindow() : 0;
         target = clicked != 0 ? clicked : typed;
@@ -748,6 +755,9 @@ public sealed class AutoClickerEngine : IDisposable
 
         /// <summary>True between the first press of an action and the release that completes it.</summary>
         public bool InAction { get; set; }
+
+        /// <summary>The script block whose first press last passed the window gate.</summary>
+        public ScriptLocation? GatedBlock { get; set; }
 
         /// <summary>The window an ActiveWindowOnly run locked onto; 0 until the first action.</summary>
         public long LockedWindow { get; set; }
