@@ -122,12 +122,15 @@ public sealed class ProfileManager
         return copy;
     }
 
-    /// <summary>Creates a fresh default profile under the given name and makes it current.</summary>
-    public ClickerProfile CreateNew(string name)
+    /// <summary>
+    /// Creates a fresh profile under the given name - from <paramref name="factory"/>, or
+    /// <see cref="NewProfileFactory"/> by default - saves it and makes it current.
+    /// </summary>
+    public ClickerProfile CreateNew(string name, Func<string, ClickerProfile>? factory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        var profile = NewProfileFactory(name);
+        var profile = (factory ?? NewProfileFactory)(name);
         profile.Name = name;
         Current = profile;
         Save();

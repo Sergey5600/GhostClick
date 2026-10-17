@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using ClickerEngine.Core.Configuration;
 using ClickerEngine.Core.Profiles;
 using Xunit;
@@ -155,9 +156,14 @@ public class ProfileTests
 
         Assert.Contains("\"inputs\"", json);
         Assert.Contains("\"leftButton\"", json);
-        Assert.DoesNotContain("\"kind\"", json);
         Assert.DoesNotContain("\"isMouse\"", json);
         Assert.DoesNotContain("\"usesMouse\"", json);
+
+        // Schema 1's action kind is gone; the profile's own kind (clicker or script) is not it.
+        var action = JsonNode.Parse(json)!["action"]!.AsObject();
+        Assert.False(action.ContainsKey("kind"));
+        Assert.False(action.ContainsKey("button"));
+        Assert.Equal("clicker", JsonNode.Parse(json)!["kind"]!.GetValue<string>());
     }
 
     [Fact]
@@ -367,6 +373,20 @@ public class ProfileTests
         Assert.Equal("Copy", manager.Current.Name);
         Assert.Equal(61, store.Load("Copy").Interval.DelayMs);
         Assert.Equal("Copy", store.LastUsedProfileName);
+    }
+
+    [Fact]
+    public void Manager_CreatesANewProfileFromAGivenFactory()
+    {
+        var store = new InMemoryProfileStore();
+        var manager = new ProfileManager(store);
+
+        var created = manager.CreateNew("Combo", name => ScriptPlannerTests.Script(new PressBlock { Id = "a" }));
+
+        Assert.Equal("Combo", created.Name);
+        Assert.Same(created, manager.Current);
+        Assert.Equal(ProfileKind.Script, store.Load("Combo").Kind);
+        Assert.Equal("a", Assert.Single(store.Load("Combo").Script.Blocks).Id);
     }
 
     [Fact]

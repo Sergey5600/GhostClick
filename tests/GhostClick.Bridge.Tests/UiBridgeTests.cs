@@ -505,7 +505,7 @@ public class UiBridgeTests
         profileMessage.GetProperty("profiles").EnumerateArray().Select(p => p.GetString()).ToArray();
 
     /// <summary>A host wired to recorders, an in-memory store and a hand-driven hotkey service.</summary>
-    private sealed class Fixture : IDisposable
+    internal sealed class Fixture : IDisposable
     {
         public Fixture(InMemoryProfileStore? store = null)
         {
@@ -601,7 +601,7 @@ public class UiBridgeTests
     /// Stands in for the WebView: records what the bridge sends and runs posted work only
     /// when the test pumps, the way a dispatcher would.
     /// </summary>
-    private sealed class FakeChannel : IUiChannel
+    internal sealed class FakeChannel : IUiChannel
     {
         private readonly ConcurrentQueue<Action> _posted = new();
 

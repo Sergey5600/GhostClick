@@ -50,6 +50,7 @@ public static class ProfileSerializer
             }
 
             MigrateSingleAction(document);
+            StampCurrentVersion(document);
 
             return document.Deserialize<ClickerProfile>(Options)
                 ?? throw new ProfileFormatException("The profile document was empty.");
@@ -84,7 +85,15 @@ public static class ProfileSerializer
         action.Remove("button");
         action.Remove("key");
         action.Remove("keyModifiers");
+    }
 
+    /// <summary>
+    /// Version 3 only added fields (<c>kind</c>, <c>script</c>) whose defaults are what an older
+    /// file meant: a clicker. Such a file needs no migration, but once read it is a version 3
+    /// profile, and is written back as one.
+    /// </summary>
+    private static void StampCurrentVersion(JsonObject document)
+    {
         if (Read(document["version"], 1) < ClickerProfile.CurrentVersion)
         {
             document["version"] = ClickerProfile.CurrentVersion;
