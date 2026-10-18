@@ -89,6 +89,8 @@
     grip: html`<svg width="12" height="18" viewBox="0 0 12 18" style="display:block; fill:#636366;"><circle cx="3" cy="3" r="1.6"></circle><circle cx="9" cy="3" r="1.6"></circle><circle cx="3" cy="9" r="1.6"></circle><circle cx="9" cy="9" r="1.6"></circle><circle cx="3" cy="15" r="1.6"></circle><circle cx="9" cy="15" r="1.6"></circle></svg>`,
     copy: html`<svg width="15" height="15" viewBox="0 0 24 24" class="scn-line" style="stroke:#aeaeb2;"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg>`,
     trash: html`<svg width="15" height="15" viewBox="0 0 24 24" class="scn-line" style="stroke:#ff453a;"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>`,
+    chevronDown: html`<svg width="10" height="10" viewBox="0 0 24 24" class="scn-line" style="stroke:#8e8e93; stroke-width:2.6;"><path d="m6 9 6 6 6-6"></path></svg>`,
+    check: html`<svg width="13" height="13" viewBox="0 0 24 24" class="scn-line" style="stroke:currentColor; stroke-width:2.8;"><path d="M20 6 9 17l-5-5"></path></svg>`,
     chevron: html`<svg width="9" height="15" viewBox="0 0 9 15" class="scn-chevron"><path d="m1.5 1.5 6 6-6 6"></path></svg>`,
     error: html`<svg width="13" height="13" viewBox="0 0 24 24" class="scn-line" style="stroke:#ff453a; stroke-width:2.4;"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>`,
     play: html`<svg width="12" height="12" viewBox="0 0 24 24" style="display:block; fill:#30d158;"><path d="M6 3.5v17a1 1 0 0 0 1.5.86l14-8.5a1 1 0 0 0 0-1.72l-14-8.5A1 1 0 0 0 6 3.5z"></path></svg>`,
@@ -370,6 +372,11 @@
       const waiting = st.run !== 'stopped' && st.block && find(this.scnScript().blocks, st.block.id);
       if (waiting && waiting.node.type === 'waitKey' && waiting.node.input && waiting.node.input.key === e.code) e.preventDefault();
 
+      if (st.ptMenu && e.code === 'Escape') {
+        this.setState({ ptMenu: null });
+        return true;
+      }
+
       if (st.picking) {
         if (e.code === 'Escape') this.setState({ picking: null, pickPos: null, settings: true });
         return true;
@@ -467,7 +474,8 @@
       } else if (f.kind === 'point') {
         const pt = f.value || xy(0, 0);
         control = html`<div class="scn-stepper">
-          <span class="scn-muted">X</span>${number(pt.x, x => f.set(xy(Math.round(x), pt.y)), -99999, true)}
+          ${this.scnPointMenu(f, pt)}
+          <span class="scn-muted pad">X</span>${number(pt.x, x => f.set(xy(Math.round(x), pt.y)), -99999, true)}
           <span class="scn-muted pad">Y</span>${number(pt.y, y => f.set(xy(pt.x, Math.round(y))), -99999, true)}
           <button class="scn-pick" onClick=${() => this.setState({ picking: { id: f.id, field: f.field }, pickPos: null, settings: false })}>${SMALL.target}${T('sc_pick')}</button>
         </div>`;
@@ -477,6 +485,39 @@
       }
 
       return html`<div key=${f.key || i} class=${'scn-field' + sep}><span class="scn-field-label">${f.label}</span>${control}</div>`;
+    },
+
+    // The saved points (the profile's, added with the point key) a point field can take. The
+    // block keeps coordinates, not the point: which one is chosen is read off a match.
+    scnPointMenu(f, pt) {
+      const points = this.p.points || [];
+      const menuKey = f.id + ':' + f.field;
+      const open = this.state.ptMenu === menuKey;
+      const chosen = points.findIndex(q => q.x === pt.x && q.y === pt.y);
+      const bind = this.p.bind.point;
+      const close = () => this.setState({ ptMenu: null });
+      return html`<div class="scn-ptmenu">
+        <button class=${'scn-ptmenu-button' + (open ? ' open' : '')} onClick=${() => this.setState({ ptMenu: open ? null : menuKey })}>
+          <span class="scn-ptmenu-dot" style=${`background:${chosen >= 0 ? '#bf5af2' : '#636366'};`}></span>
+          <span>${chosen >= 0 ? T('ptN', chosen + 1) : T('sc_customXY')}</span>
+          ${SMALL.chevronDown}
+        </button>
+        ${open && html`<div class="scn-ptmenu-pop">
+          <div class="scn-ptmenu-title">${T('sc_savedPts')}</div>
+          ${points.map((q, i) => html`
+            <button key=${i} class="scn-ptmenu-row" onClick=${() => { close(); f.set(xy(q.x, q.y)); }}>
+              <span class="scn-ptmenu-check">${i === chosen && SMALL.check}</span>
+              <span class="scn-ptmenu-name">${T('ptN', i + 1)}</span>
+              <span class="scn-ptmenu-xy">${q.x}, ${q.y}</span>
+            </button>`)}
+          ${!points.length && html`<div class="scn-ptmenu-empty">${T('sc_noPts', bind ? fmt(bind) : T('ptKeyFb'))}</div>`}
+          <div class="scn-ptmenu-sep"></div>
+          <button class="scn-ptmenu-row" onClick=${close}>
+            <span class="scn-ptmenu-check">${chosen < 0 && SMALL.check}</span>
+            <span class="scn-ptmenu-name">${T('sc_customXY')}</span>
+          </button>
+        </div>`}
+      </div>`;
     },
 
     scnFields(b, held) {
