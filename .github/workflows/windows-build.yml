@@ -5,7 +5,8 @@
 # starts the installed app and waits for its interface, and uninstalls it again.
 #
 # Pushing a tag vX.Y.Z (matching <Version> in GhostClick.App.csproj) also publishes the
-# setup as a GitHub release - the link to hand out.
+# setup as a GitHub release - the link to hand out - with its SHA-256 next to it, which the
+# app's updater checks every download against.
 name: Windows build
 
 on:
@@ -94,7 +95,7 @@ jobs:
         shell: pwsh
         run: |
           $required = 'GhostClick.exe', 'wwwroot/index.html', 'wwwroot/app.js', 'wwwroot/host.js',
-                      'wwwroot/i18n.js', 'wwwroot/layout.js', 'wwwroot/app.css', 'wwwroot/vendor/preact.min.js',
+                      'wwwroot/i18n.js', 'wwwroot/layout.js', 'wwwroot/scenario.js', 'wwwroot/app.css', 'wwwroot/vendor/preact.min.js',
                       'wwwroot/vendor/htm.min.js', 'wwwroot/fonts/Geist-Variable.woff2'
           foreach ($file in $required) {
             if (-not (Test-Path "publish/app/$file")) { throw "The published app is missing $file" }
@@ -375,6 +376,16 @@ jobs:
           merge-multiple: true
           path: release
 
+      # GhostClick offers a release as an update only with this file: it checks the download
+      # against it before running it.
+      - name: Checksum the setup
+        working-directory: release
+        run: |
+          for setup in GhostClick-Setup-*.exe; do
+            sha256sum "$setup" > "$setup.sha256"
+            cat "$setup.sha256"
+          done
+
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -418,12 +429,12 @@ jobs:
           # title and notes above, otherwise its own stay. --verify-tag stops gh from
           # re-creating a tag deleted meanwhile at the head of the default branch.
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/GhostClick-Setup-*.exe --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$GITHUB_REF_NAME" release/GhostClick-Setup-*.exe release/GhostClick-Setup-*.exe.sha256 --repo "$GITHUB_REPOSITORY" --clobber
             body=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
             if [ -z "$body" ]; then
               gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "GhostClick ${version}" --notes-file notes.md
             fi
           else
-            gh release create "$GITHUB_REF_NAME" release/GhostClick-Setup-*.exe --verify-tag \
+            gh release create "$GITHUB_REF_NAME" release/GhostClick-Setup-*.exe release/GhostClick-Setup-*.exe.sha256 --verify-tag \
               --repo "$GITHUB_REPOSITORY" --title "GhostClick ${version}" --notes-file notes.md
           fi

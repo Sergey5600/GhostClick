@@ -50,6 +50,10 @@ public sealed class ScriptPlanner : IRunPlanner
         get
         {
             var script = _profile.Script ?? new ScriptSettings();
+            if (script.StartBlockId is not null)
+            {
+                return null;
+            }
 
             try
             {
@@ -77,8 +81,10 @@ public sealed class ScriptPlanner : IRunPlanner
 
     private IEnumerable<EngineStep> PlanRun(ScriptSettings script)
     {
-        var state = new PlanState(script);
-        long? passes = Passes(script);
+        var state = new PlanState(script) { Seeking = script.StartBlockId };
+
+        // «Запустить отсюда» runs from the block to the end of the script, once.
+        long? passes = script.StartBlockId is null ? Passes(script) : 1;
 
         for (long pass = 1; passes is null || pass <= passes; pass++)
         {
@@ -113,15 +119,33 @@ public sealed class ScriptPlanner : IRunPlanner
                 continue;
             }
 
+            // Looking for the block a run starts at: skip what comes before it, step into
+            // the container that holds it.
+            if (state.Seeking is { } start)
+            {
+                if (block.Id == start)
+                {
+                    state.Seeking = null;
+                }
+                else if (block is not IBlockContainer container ||
+                         !ScriptSettings.Walk(container.Blocks).Any(b => b.Id == start))
+                {
+                    continue;
+                }
+            }
+
             if (block is StopBlock)
             {
                 state.Stopped = true;
                 yield break;
             }
 
-            var steps = block is RepeatBlock repeat
-                ? PlanRepeat(repeat, frame, state)
-                : PlanStep(block, frame.Locate(block), state);
+            var steps = block switch
+            {
+                RepeatBlock repeat => PlanRepeat(repeat, frame, state),
+                RandomBlock random => PlanRandom(random, frame, state),
+                _ => PlanStep(block, frame.Locate(block), state),
+            };
 
             foreach (var step in steps)
             {
@@ -151,6 +175,22 @@ public sealed class ScriptPlanner : IRunPlanner
         }
     }
 
+    /// <summary>One enabled block inside, drawn at random each time; the one a run starts at, if it is in here.</summary>
+    private IEnumerable<EngineStep> PlanRandom(RandomBlock random, Frame frame, PlanState state)
+    {
+        var choices = (random.Blocks ?? new()).Where(b => b is { Enabled: true }).ToList();
+        if (choices.Count == 0)
+        {
+            return Enumerable.Empty<EngineStep>();
+        }
+
+        var pick = state.Seeking is { } start
+            ? choices.First(b => b.Id == start || ScriptSettings.Walk(new[] { b }).Any(inner => inner.Id == start))
+            : choices[_random.NextInt(0, choices.Count - 1)];
+
+        return PlanBlocks(new List<ScriptBlock> { pick }, frame, state);
+    }
+
     /// <summary>One block that does something: the pause before it if one is due, then its steps.</summary>
     private IEnumerable<EngineStep> PlanStep(ScriptBlock block, ScriptLocation location, PlanState state)
     {
@@ -168,9 +208,16 @@ public sealed class ScriptPlanner : IRunPlanner
             PressBlock press => Press(press),
             HoldBlock hold => Hold(hold),
             ReleaseBlock release => Release(release),
+            HoldForBlock holdFor => HoldFor(holdFor),
+            ScrollBlock scroll => Scroll(scroll),
+            DragBlock drag => Drag(drag),
+            TypeTextBlock type => TypeText(type),
             MoveBlock move => Move(move),
+            ShiftBlock shift => Shift(shift),
+            WaitKeyBlock { Input: { Key: not VirtualKey.None } key } => new[] { EngineStep.WaitForKey(key.Clone()) },
 
-            // An unknown block never gets here past the validator; skip it rather than guess.
+            // A «Метка» does nothing; an unknown block never gets here past the validator,
+            // and is skipped rather than guessed at.
             _ => null,
         };
 
@@ -218,10 +265,67 @@ public sealed class ScriptPlanner : IRunPlanner
             yield return EngineStep.KeyDown(modifier, isModifier: true).WithDevice(device);
         }
 
+        var timing = block.ProfilePress ? input.Clone() : input;
+        if (block.ProfilePress)
+        {
+            timing.PressMs = ProfilePressMs();
+        }
+
+        int clicks = block.Click == ClickType.Double ? 2 : 1;
+        for (int click = 1; click <= clicks; click++)
+        {
+            if (click > 1 && _profile.Action.DoubleClickGapMs > 0)
+            {
+                yield return EngineStep.Wait(_profile.Action.DoubleClickGapMs);
+            }
+
+            yield return PlanSteps.Down(input.Key).WithDevice(device);
+
+            int hold = PlanSteps.PressDuration(timing, _profile.Action, _random);
+            if (hold > 0)
+            {
+                yield return EngineStep.Wait(hold);
+            }
+
+            // A double click is one action of two clicks, as in a clicker.
+            yield return PlanSteps.Up(input.Key, completesAction: click == clicks);
+        }
+
+        for (int i = modifiers.Length - 1; i >= 0; i--)
+        {
+            yield return EngineStep.KeyUp(modifiers[i], isModifier: true);
+        }
+    }
+
+    /// <summary>How long the profile's clicks last: its first clicking input's press time, 30 ms without one.</summary>
+    private int ProfilePressMs() =>
+        _profile.Action.Inputs?.FirstOrDefault(i => i is { Mode: PressMode.Click, Key: not VirtualKey.None })?.PressMs
+        ?? InputChord.DefaultPressMs;
+
+    /// <summary>Down, held for a fixed or random time, up; modifiers around it all. One action.</summary>
+    private IEnumerable<EngineStep> HoldFor(HoldForBlock block)
+    {
+        foreach (var step in TravelTo(block.At))
+        {
+            yield return step;
+        }
+
+        if (block.Input is not { Key: not VirtualKey.None } input)
+        {
+            yield break;
+        }
+
+        var device = DeviceOf(input);
+        var modifiers = PlanSteps.Modifiers(input.Modifiers);
+        foreach (var modifier in modifiers)
+        {
+            yield return EngineStep.KeyDown(modifier, isModifier: true).WithDevice(device);
+        }
+
         yield return PlanSteps.Down(input.Key).WithDevice(device);
 
-        int hold = PlanSteps.PressDuration(input, _profile.Action, _random);
-        if (hold > 0)
+        var hold = NextDuration(block.RandomizeEnabled, block.DurationMs, block.MinDurationMs, block.MaxDurationMs);
+        if (hold > TimeSpan.Zero)
         {
             yield return EngineStep.Wait(hold);
         }
@@ -231,6 +335,99 @@ public sealed class ScriptPlanner : IRunPlanner
         for (int i = modifiers.Length - 1; i >= 0; i--)
         {
             yield return EngineStep.KeyUp(modifiers[i], isModifier: true);
+        }
+    }
+
+    /// <summary>The wheel, at a point if the block has one; one action whatever the notches.</summary>
+    private IEnumerable<EngineStep> Scroll(ScrollBlock block)
+    {
+        foreach (var step in TravelTo(block.At))
+        {
+            yield return step;
+        }
+
+        int notches = Math.Max(1, block.Notches);
+        yield return EngineStep.Scroll(block.Direction == ScrollDirection.Up ? notches : -notches).WithDevice(ActionKind.Mouse);
+    }
+
+    /// <summary>
+    /// To the start point by the profile's movement, the button down, a straight carry to the
+    /// end point in the block's time, the button up. One action.
+    /// </summary>
+    private IEnumerable<EngineStep> Drag(DragBlock block)
+    {
+        var from = Aim(block.From);
+        var to = Aim(block.To);
+
+        bool moved = false;
+        foreach (var step in PlanSteps.Travel(_cursor, from, _profile, _random))
+        {
+            moved = true;
+            yield return step;
+        }
+
+        if (!moved)
+        {
+            yield return EngineStep.MoveTo(from);
+        }
+
+        var button = block.Button.ToVirtualKey();
+        yield return PlanSteps.Down(button).WithDevice(ActionKind.Mouse);
+
+        var carry = new MovementSettings
+        {
+            Mode = MovementMode.Smooth,
+            Easing = EasingMode.EaseInOut,
+            DurationMs = block.DurationMs,
+            StepIntervalMs = _profile.Movement.StepIntervalMs,
+            MaxSteps = _profile.Movement.MaxSteps,
+        };
+
+        foreach (var sample in MotionPlanner.Plan(from, to, carry, _profile.Jitter, _random))
+        {
+            if (sample.Delay > TimeSpan.Zero)
+            {
+                yield return EngineStep.Wait(sample.Delay);
+            }
+
+            yield return EngineStep.MoveTo(sample.Position);
+        }
+
+        yield return PlanSteps.Up(button, completesAction: true);
+    }
+
+    /// <summary>The text one character at a time, with the block's pause between; one action.</summary>
+    private IEnumerable<EngineStep> TypeText(TypeTextBlock block)
+    {
+        var text = block.Text ?? string.Empty;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (i > 0 && block.CharDelayMs > 0)
+            {
+                yield return EngineStep.Wait(Jitter.ApplyTiming(TimeSpan.FromMilliseconds(block.CharDelayMs), _profile.Jitter, _random));
+            }
+
+            var step = EngineStep.Text(text[i], completesAction: i == text.Length - 1);
+            yield return i == 0 ? step.WithDevice(ActionKind.Keyboard) : step;
+        }
+    }
+
+    /// <summary>By an offset from where the cursor is now, by the profile's movement; always a step, like «Переместить».</summary>
+    private IEnumerable<EngineStep> Shift(ShiftBlock block)
+    {
+        var from = _cursor.GetCursorPosition();
+        var target = _screen.VirtualBounds.Clamp(new ScreenPoint(from.X + block.Dx, from.Y + block.Dy));
+
+        bool moved = false;
+        foreach (var step in PlanSteps.Travel(_cursor, target, _profile, _random))
+        {
+            moved = true;
+            yield return step;
+        }
+
+        if (!moved)
+        {
+            yield return EngineStep.MoveTo(target);
         }
     }
 
@@ -288,7 +485,15 @@ public sealed class ScriptPlanner : IRunPlanner
         var target = Aim(block.To);
         bool moved = false;
 
-        foreach (var step in PlanSteps.Travel(_cursor, target, _profile, _random))
+        var profile = _profile;
+        if (block.Movement is { } mode)
+        {
+            profile = _profile.Clone();
+            profile.Movement.Mode = mode;
+            profile.Movement.DurationMs = Math.Max(0, block.DurationMs);
+        }
+
+        foreach (var step in PlanSteps.Travel(_cursor, target, profile, _random))
         {
             moved = true;
             yield return step;
@@ -314,18 +519,22 @@ public sealed class ScriptPlanner : IRunPlanner
     private ScreenPoint Aim(ScreenPoint point) =>
         _screen.VirtualBounds.Clamp(Jitter.ApplyPosition(point, _profile.Jitter, _random));
 
-    private TimeSpan NextWait(WaitBlock wait)
+    private TimeSpan NextWait(WaitBlock wait) =>
+        NextDuration(wait.RandomizeEnabled, wait.DurationMs, wait.MinDurationMs, wait.MaxDurationMs);
+
+    /// <summary>A fixed time, or one drawn from a range, with the profile's timing jitter.</summary>
+    private TimeSpan NextDuration(bool random, int duration, int minDuration, int maxDuration)
     {
         int milliseconds;
-        if (wait.RandomizeEnabled)
+        if (random)
         {
-            int min = Math.Max(0, Math.Min(wait.MinDurationMs, wait.MaxDurationMs));
-            int max = Math.Max(0, Math.Max(wait.MinDurationMs, wait.MaxDurationMs));
+            int min = Math.Max(0, Math.Min(minDuration, maxDuration));
+            int max = Math.Max(0, Math.Max(minDuration, maxDuration));
             milliseconds = _random.NextInt(min, max);
         }
         else
         {
-            milliseconds = Math.Max(0, wait.DurationMs);
+            milliseconds = Math.Max(0, duration);
         }
 
         return Jitter.ApplyTiming(TimeSpan.FromMilliseconds(milliseconds), _profile.Jitter, _random);
@@ -356,8 +565,27 @@ public sealed class ScriptPlanner : IRunPlanner
                 case StopBlock:
                     return (actions, true);
 
-                case PressBlock or ReleaseBlock:
+                case PressBlock or ReleaseBlock or HoldForBlock or ScrollBlock or DragBlock:
+                case TypeTextBlock { Text.Length: > 0 }:
                     actions++;
+                    break;
+
+                case RandomBlock random:
+                    // Known only when every choice does the same number of actions and none stops.
+                    var choices = (random.Blocks ?? new()).Where(b => b is { Enabled: true })
+                        .Select(b => Count(new List<ScriptBlock> { b }))
+                        .ToList();
+                    if (choices.Count == 0)
+                    {
+                        break;
+                    }
+
+                    if (choices.Any(c => c is null || c.Value.Stops) || choices.Select(c => c!.Value.Actions).Distinct().Count() > 1)
+                    {
+                        return null;
+                    }
+
+                    actions = checked(actions + choices[0]!.Value.Actions);
                     break;
 
                 case RepeatBlock repeat:
@@ -407,5 +635,8 @@ public sealed class ScriptPlanner : IRunPlanner
 
         /// <summary>A «Стоп» was reached; nothing else runs.</summary>
         public bool Stopped { get; set; }
+
+        /// <summary>The block the run starts at, until it is reached; null once it is, or when the run starts at the top.</summary>
+        public string? Seeking { get; set; }
     }
 }

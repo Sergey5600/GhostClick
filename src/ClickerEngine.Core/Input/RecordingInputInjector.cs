@@ -10,6 +10,8 @@ public enum InjectedEventKind
     MouseUp,
     KeyDown,
     KeyUp,
+    Scroll,
+    Text,
 }
 
 /// <summary>One captured input event.</summary>
@@ -19,6 +21,18 @@ public readonly record struct InjectedEvent(
     MouseButton Button,
     VirtualKey Key)
 {
+    /// <summary>Wheel notches of a <see cref="InjectedEventKind.Scroll"/>; positive is up.</summary>
+    public int Notches { get; init; }
+
+    /// <summary>The character of a <see cref="InjectedEventKind.Text"/>.</summary>
+    public char Character { get; init; }
+
+    public static InjectedEvent Scroll(int notches, ScreenPoint position) =>
+        new(InjectedEventKind.Scroll, position, default, default) { Notches = notches };
+
+    public static InjectedEvent Text(char character) =>
+        new(InjectedEventKind.Text, default, default, default) { Character = character };
+
     public static InjectedEvent Move(ScreenPoint position) =>
         new(InjectedEventKind.Move, position, default, default);
 
@@ -40,6 +54,8 @@ public readonly record struct InjectedEvent(
         InjectedEventKind.MouseDown => $"MouseDown {Button} @ {Position}",
         InjectedEventKind.MouseUp => $"MouseUp {Button} @ {Position}",
         InjectedEventKind.KeyDown => $"KeyDown {Key}",
+        InjectedEventKind.Scroll => $"Scroll {Notches} @ {Position}",
+        InjectedEventKind.Text => $"Text '{Character}'",
         _ => $"KeyUp {Key}",
     };
 }
@@ -124,6 +140,10 @@ public sealed class RecordingInputInjector : IInputInjector
 
     public void KeyUp(VirtualKey key) => Record(InjectedEvent.KeyUp(key));
 
+    public void Scroll(int notches) => Record(InjectedEvent.Scroll(notches, GetCursorPosition()));
+
+    public void TypeCharacter(char character) => Record(InjectedEvent.Text(character));
+
     public void Clear()
     {
         lock (_sync)
@@ -175,6 +195,14 @@ public sealed class NullInputInjector : IInputInjector
     }
 
     public void KeyUp(VirtualKey key)
+    {
+    }
+
+    public void Scroll(int notches)
+    {
+    }
+
+    public void TypeCharacter(char character)
     {
     }
 }

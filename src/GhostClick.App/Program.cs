@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 
@@ -23,7 +25,44 @@ public static class Program
 
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
         app.DispatcherUnhandledException += OnDispatcherUnhandledException;
-        return app.Run(new MainWindow());
+        int exitCode = app.Run(new MainWindow());
+
+        // An update waits for GhostClick to be gone: the window, the engine and the hooks are
+        // by now, and the mutex the installer checks for goes before it starts.
+        if (PendingUpdate is { } update)
+        {
+            instance.ReleaseMutex();
+            instance.Dispose();
+            RunInstaller(update.SetupPath, update.Relaunch);
+        }
+
+        return exitCode;
+    }
+
+    /// <summary>A downloaded installer to run once the app has closed (see <see cref="MainWindow"/>).</summary>
+    internal static (string SetupPath, bool Relaunch)? PendingUpdate { get; set; }
+
+    /// <summary>
+    /// Runs the installer the way an upgrade should go: no questions, a progress window, and
+    /// with <paramref name="relaunch"/> GhostClick started again at the end. /UPDATE makes it
+    /// wait for this process to let go of the app first (installer/GhostClick.iss).
+    /// </summary>
+    private static void RunInstaller(string setupPath, bool relaunch)
+    {
+        if (!File.Exists(setupPath))
+        {
+            return;
+        }
+
+        var arguments = "/SILENT /SUPPRESSMSGBOXES /NORESTART /UPDATE=1" + (relaunch ? " /RELAUNCH=1" : string.Empty);
+        try
+        {
+            Process.Start(new ProcessStartInfo(setupPath, arguments) { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException)
+        {
+            MessageBox.Show(ex.Message, "GhostClick", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)

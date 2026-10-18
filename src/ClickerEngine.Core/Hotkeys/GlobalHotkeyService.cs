@@ -24,7 +24,7 @@ namespace ClickerEngine.Core.Hotkeys;
 /// </para>
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class GlobalHotkeyService : IHotkeyService
+public sealed class GlobalHotkeyService : IHotkeyService, IKeyPressSource
 {
     private readonly object _sync = new();
     private readonly BlockingCollection<HotkeyEventArgs> _queue = new(new ConcurrentQueue<HotkeyEventArgs>());
@@ -45,6 +45,9 @@ public sealed class GlobalHotkeyService : IHotkeyService
     private bool _disposed;
 
     public event EventHandler<HotkeyEventArgs>? HotkeyTriggered;
+
+    /// <inheritdoc/>
+    public event EventHandler<KeyPressedEventArgs>? KeyPressed;
 
     public bool IsRunning => _running;
 
@@ -303,6 +306,11 @@ public sealed class GlobalHotkeyService : IHotkeyService
 
         if ((isDown || isUp) && !IsSelfInjected(data.flags, NativeMethods.LLKHF_INJECTED, data.dwExtraInfo))
         {
+            if (isDown)
+            {
+                ReportPress((VirtualKey)data.vkCode);
+            }
+
             if (HandleKey((VirtualKey)data.vkCode, isDown) && SuppressHotkeys)
             {
                 return new IntPtr(1);
@@ -325,9 +333,17 @@ public sealed class GlobalHotkeyService : IHotkeyService
             return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
         }
 
-        if (!IsSelfInjected(data.flags, NativeMethods.LLMHF_INJECTED, data.dwExtraInfo) &&
-            HandleKey(key, isDown) &&
-            SuppressHotkeys)
+        if (IsSelfInjected(data.flags, NativeMethods.LLMHF_INJECTED, data.dwExtraInfo))
+        {
+            return NativeMethods.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+        }
+
+        if (isDown)
+        {
+            ReportPress(key);
+        }
+
+        if (HandleKey(key, isDown) && SuppressHotkeys)
         {
             return new IntPtr(1);
         }
@@ -384,6 +400,29 @@ public sealed class GlobalHotkeyService : IHotkeyService
 
         data = Marshal.PtrToStructure<NativeMethods.MSLLHOOKSTRUCT>(lParam);
         return true;
+    }
+
+    /// <summary>
+    /// Tells <see cref="KeyPressed"/> listeners right here on the hook thread: the only
+    /// listener is a waiting script, which just sets a flag, and the queue to the dispatch
+    /// thread is for hotkeys.
+    /// </summary>
+    private void ReportPress(VirtualKey key)
+    {
+        var handler = KeyPressed;
+        if (handler is null)
+        {
+            return;
+        }
+
+        try
+        {
+            handler(this, new KeyPressedEventArgs(key, GetActiveModifiers() & ~key.ToModifierFlag()));
+        }
+        catch (Exception)
+        {
+            // A listener's failure must not take the system's input queue down with it.
+        }
     }
 
     /// <summary>True for events this process itself injected, which must never retrigger a hotkey.</summary>

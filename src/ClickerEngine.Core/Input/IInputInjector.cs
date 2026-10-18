@@ -12,7 +12,7 @@ public interface ICursorProvider
 /// <summary>
 /// The single seam between the engine and the operating system's input stack.
 /// <para>
-/// Everything the engine does is expressed as the five primitives below, so an alternative
+/// Everything the engine does is expressed as the primitives below, so an alternative
 /// backend (a signed low-level driver, a hardware device, a remote agent) can be dropped in
 /// by implementing this interface - no other part of the engine changes.
 /// </para>
@@ -36,6 +36,15 @@ public interface IInputInjector : ICursorProvider
 
     /// <summary>Releases a previously pressed key.</summary>
     void KeyUp(VirtualKey key);
+
+    /// <summary>Turns the vertical wheel by whole notches: positive is up (away from the user), negative down.</summary>
+    void Scroll(int notches);
+
+    /// <summary>
+    /// Types one UTF-16 code unit as text, independent of the keyboard layout (a surrogate
+    /// pair is two calls).
+    /// </summary>
+    void TypeCharacter(char character);
 }
 
 /// <summary>Reports the bounds the cursor may be moved within.</summary>

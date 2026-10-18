@@ -35,10 +35,18 @@ public static class ScriptTexts
         "press" => "Нажать",
         "hold" => "Зажать",
         "release" => "Отпустить",
-        "move" => "Переместить курсор",
+        "holdFor" => "Удержать",
+        "scroll" => "Прокрутить",
+        "drag" => "Перетащить",
+        "type" => "Ввести текст",
+        "move" => "Переместить",
+        "shift" => "Сдвинуть",
         "wait" => "Ждать",
+        "waitKey" => "Ждать клавишу",
         "repeat" => "Повторить",
+        "random" => "Случайно одно из",
         "stop" => "Стоп",
+        "label" => "Метка",
         _ => "Неизвестный блок",
     };
 
@@ -80,9 +88,19 @@ public static class ScriptTexts
             };
         }
 
+        var block = script?.Find(error.BlockId);
         return field switch
         {
             null => "Пустой блок",
+            ReleaseBlock.HeldField when block is ReleaseBlock { Input: { } input } && HeldAnything(script!, block) =>
+                $"{KeyCodes.Describe(input.Key, input.Modifiers, "ru")} не зажата выше по сценарию",
+            ReleaseBlock.HeldField => "Выше по сценарию ничего не зажато",
+            nameof(InputBlock.Input) when block is WaitKeyBlock => "Выберите клавишу",
+            nameof(MoveBlock.DurationMs) when block is MoveBlock => "Время перемещения не может быть отрицательным",
+            nameof(ScrollBlock.Notches) => "Прокрутите хотя бы на один щелчок",
+            nameof(TypeTextBlock.Text) => "Пустой текст",
+            nameof(TypeTextBlock.CharDelayMs) => "Пауза между символами не может быть отрицательной",
+            nameof(RandomBlock.Blocks) when block is RandomBlock => "Внутри нет включённых блоков",
             nameof(ScriptBlock.Id) when error.BlockId is null => "У блока нет id",
             nameof(ScriptBlock.Id) => "Такой id уже есть у другого блока",
             nameof(ScriptBlock.Type) when script?.Find(error.BlockId) is UnknownBlock { TypeName.Length: 0 } => "У блока не указан тип",
@@ -96,6 +114,25 @@ public static class ScriptTexts
             nameof(RepeatBlock.Blocks) => "Внутри повтора нет включённых блоков",
             _ => error.Message,
         };
+    }
+
+    /// <summary>True when an enabled «Зажать» comes before <paramref name="release"/> in the list.</summary>
+    private static bool HeldAnything(ScriptSettings script, ScriptBlock release)
+    {
+        foreach (var block in ScriptSettings.Walk(script.Blocks))
+        {
+            if (ReferenceEquals(block, release))
+            {
+                return false;
+            }
+
+            if (block is HoldBlock { Input.Key: not VirtualKey.None })
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -163,6 +200,8 @@ public static class ScriptTexts
         (nameof(WaitBlock.DurationMs), true) => "ms",
         (nameof(WaitBlock.MinDurationMs), true) => "minMs",
         (nameof(WaitBlock.MaxDurationMs), true) => "maxMs",
+        (nameof(ScrollBlock.Notches), true) => "count",
+        (nameof(TypeTextBlock.CharDelayMs), true) => "ms",
         _ => char.ToLowerInvariant(field[0]) + field[1..],
     };
 }

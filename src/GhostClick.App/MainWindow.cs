@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
@@ -12,6 +14,7 @@ using ClickerEngine.Core.Hotkeys;
 using ClickerEngine.Core.Input;
 using ClickerEngine.Core.Profiles;
 using GhostClick.Bridge;
+using GhostClick.Bridge.Updates;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -22,7 +25,7 @@ namespace GhostClick.App;
 /// <see cref="UiBridge"/> connects it to the engine. This class only wires the two together
 /// and keeps the browser locked down to that one page.
 /// </summary>
-public sealed class MainWindow : Window, IUiChannel
+public sealed class MainWindow : Window, IUiChannel, IUpdateHost
 {
     /// <summary>
     /// The page is served from this made-up host, mapped onto the <c>wwwroot</c> folder. The
@@ -39,6 +42,7 @@ public sealed class MainWindow : Window, IUiChannel
     private readonly ClickerHost _host;
     private readonly UiBridge _bridge;
     private readonly DispatcherTimer _ticker;
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
 
     public MainWindow()
     {
@@ -78,7 +82,13 @@ public sealed class MainWindow : Window, IUiChannel
         var windowProbe = new DryRunAwareWindowProbe(new Win32WindowProbe(), _injector);
 
         _host = new ClickerHost(_injector, new JsonProfileStore(), hotkeys, screen: screen, windowProbe: windowProbe);
-        _bridge = new UiBridge(_host, _injector, this, settings: new JsonUiSettingsStore());
+        // Looks for a newer release on GitHub once per start (not in test builds) and offers it.
+        var updater = new Updater(
+            Assembly.GetEntryAssembly()?.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0",
+            _http,
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GhostClick", "Updates"));
+
+        _bridge = new UiBridge(_host, _injector, this, settings: new JsonUiSettingsStore(), updater: updater, updateHost: this);
 
         _ticker = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(250) };
         _ticker.Tick += (_, _) => _bridge.Tick();
@@ -99,6 +109,12 @@ public sealed class MainWindow : Window, IUiChannel
     // BeginInvoke, never Invoke: the engine's Stop blocks the UI thread until the run thread
     // ends, and a run thread waiting on the UI thread would never end.
     void IUiChannel.Post(Action action) => Dispatcher.BeginInvoke(DispatcherPriority.Normal, action);
+
+    // ------------------------------------------------------------------ IUpdateHost
+
+    void IUpdateHost.InstallOnExit(string setupPath, bool relaunch) => Program.PendingUpdate = (setupPath, relaunch);
+
+    void IUpdateHost.Exit() => Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(Close));
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -148,6 +164,7 @@ public sealed class MainWindow : Window, IUiChannel
         // Stops a running clicker (releasing anything it holds down) and removes the hooks.
         _host.Dispose();
         _webView.Dispose();
+        _http.Dispose();
     }
 
     /// <summary>

@@ -23,6 +23,15 @@ public enum EngineStepKind
     /// <summary>Release <see cref="EngineStep.Key"/>.</summary>
     KeyUp,
 
+    /// <summary>Turn the mouse wheel by <see cref="EngineStep.Notches"/> (positive is up, away from the user).</summary>
+    Scroll,
+
+    /// <summary>Type <see cref="EngineStep.Character"/>, whatever key it sits on in the current layout.</summary>
+    Text,
+
+    /// <summary>Stand still until the user presses <see cref="EngineStep.Chord"/>.</summary>
+    WaitForKey,
+
     /// <summary>
     /// An action tick with nothing to press, because every input is held for the whole run.
     /// It still completes an action, so a fixed count still ends the run.
@@ -59,6 +68,15 @@ public readonly record struct EngineStep
 
     /// <summary>Key for keyboard steps.</summary>
     public VirtualKey Key { get; private init; }
+
+    /// <summary>Wheel notches for <see cref="EngineStepKind.Scroll"/> steps; positive is up.</summary>
+    public int Notches { get; private init; }
+
+    /// <summary>The character for <see cref="EngineStepKind.Text"/> steps.</summary>
+    public char Character { get; private init; }
+
+    /// <summary>The key to wait for on <see cref="EngineStepKind.WaitForKey"/> steps.</summary>
+    public InputChord? Chord { get; private init; }
 
     /// <summary>
     /// True for the modifier presses that wrap a key action, so the engine does not count
@@ -112,6 +130,15 @@ public readonly record struct EngineStep
             CompletesAction = completesAction && !isModifier,
         };
 
+    public static EngineStep Scroll(int notches, bool completesAction = true) =>
+        new(EngineStepKind.Scroll) { Notches = notches, CompletesAction = completesAction };
+
+    public static EngineStep Text(char character, bool completesAction = false) =>
+        new(EngineStepKind.Text) { Character = character, CompletesAction = completesAction };
+
+    public static EngineStep WaitForKey(InputChord chord) =>
+        new(EngineStepKind.WaitForKey) { Chord = chord ?? throw new ArgumentNullException(nameof(chord)) };
+
     public static EngineStep Tick() =>
         new(EngineStepKind.Tick) { CompletesAction = true };
 
@@ -129,6 +156,9 @@ public readonly record struct EngineStep
         EngineStepKind.MouseUp => $"MouseUp {Button}",
         EngineStepKind.KeyDown => $"KeyDown {Key}",
         EngineStepKind.Tick => "Tick",
+        EngineStepKind.Scroll => $"Scroll {Notches}",
+        EngineStepKind.Text => $"Text '{Character}'",
+        EngineStepKind.WaitForKey => $"WaitForKey {Chord}",
         _ => $"KeyUp {Key}",
     };
 }

@@ -6,6 +6,8 @@
 ;   - adds GhostClick to the Start menu and, unless unticked, to the desktop;
 ;   - installs the Microsoft Edge WebView2 Runtime if the machine has none;
 ;   - asks for a running GhostClick to be closed before upgrading or uninstalling it;
+;   - when GhostClick runs it for an update (/UPDATE=1), waits for GhostClick to exit and,
+;     with /RELAUNCH=1, starts it again at the end;
 ;   - registers an uninstaller that also offers to remove the user's profiles.
 ;
 ; CI builds it (.github/workflows/windows-build.yml). By hand, from the repository root in cmd:
@@ -127,6 +129,8 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "{#AppNa
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; An update GhostClick started itself («Перезапустить»): it comes back once installed.
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: RelaunchAfterUpdate
 
 [UninstallDelete]
 ; The interface's browser cache (WebView2 user data). Profiles live elsewhere and are only
@@ -136,6 +140,29 @@ Type: filesandordirs; Name: "{localappdata}\{#AppName}"
 [Code]
 const
   WebView2ClientKey = 'Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+
+{ GhostClick runs its update's installer as it exits (Program.cs). The app's mutex can
+  outlive the moment the installer starts by a little: wait for it here, before Setup checks
+  AppMutex and would ask to close GhostClick - which, silent, would mean giving up. }
+function InitializeSetup: Boolean;
+var
+  Attempt: Integer;
+begin
+  Result := True;
+  if ExpandConstant('{param:UPDATE|0}') <> '1' then
+    Exit;
+  for Attempt := 1 to 60 do
+  begin
+    if not CheckForMutexes('{#AppName}.SingleInstance') then
+      Break;
+    Sleep(500);
+  end;
+end;
+
+function RelaunchAfterUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
 
 function HasWebView2Version(RootKey: Integer; SubKey: String): Boolean;
 var

@@ -27,6 +27,13 @@ public sealed class ScriptSettings
     public List<ScriptBlock> Blocks { get; set; } = new();
 
     /// <summary>
+    /// Not saved: when set, the run starts at this block («Запустить отсюда») and everything
+    /// before it in the first pass is skipped. The interface's test run sets it on a copy.
+    /// </summary>
+    [JsonIgnore]
+    public string? StartBlockId { get; set; }
+
+    /// <summary>
     /// True when the script can run until it is stopped: it repeats forever, or an enabled
     /// «Повторить» inside it does.
     /// </summary>

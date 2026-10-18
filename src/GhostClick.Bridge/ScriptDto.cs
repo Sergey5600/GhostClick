@@ -27,7 +27,11 @@ public sealed class ScriptDto
 /// </summary>
 public sealed class BlockDto
 {
-    /// <summary><c>press</c>, <c>hold</c>, <c>release</c>, <c>move</c>, <c>wait</c>, <c>repeat</c>, <c>stop</c> - or a type from a newer version.</summary>
+    /// <summary>
+    /// <c>press</c>, <c>hold</c>, <c>release</c>, <c>holdFor</c>, <c>scroll</c>, <c>drag</c>,
+    /// <c>type</c>, <c>move</c>, <c>shift</c>, <c>wait</c>, <c>waitKey</c>, <c>repeat</c>,
+    /// <c>random</c>, <c>stop</c>, <c>label</c> - or a type from a newer version.
+    /// </summary>
     public string Type { get; set; } = string.Empty;
 
     public string Id { get; set; } = string.Empty;
@@ -36,7 +40,7 @@ public sealed class BlockDto
 
     public string? Label { get; set; }
 
-    /// <summary>press, hold, release: the key or mouse button.</summary>
+    /// <summary>press, hold, release, holdFor, waitKey: the key or mouse button; drag: the mouse button.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ChordDto? Input { get; set; }
 
@@ -44,19 +48,54 @@ public sealed class BlockDto
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Press { get; set; }
 
-    /// <summary>press, hold, release: where to move the cursor first; none = where it is.</summary>
+    /// <summary>press: <c>single</c> or <c>double</c>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Click { get; set; }
+
+    /// <summary>press: <c>profile</c> (as long as the profile's clicks) or <c>own</c> (<see cref="Press"/>).</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Dur { get; set; }
+
+    /// <summary>press, hold, release, scroll: where to move the cursor first; none = where it is. drag: where it starts.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public XyDto? At { get; set; }
 
-    /// <summary>move: where to.</summary>
+    /// <summary>move, drag: where to.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public XyDto? To { get; set; }
 
-    /// <summary>wait: milliseconds.</summary>
+    /// <summary>move: <c>instant</c> or <c>smooth</c> (in <see cref="Ms"/>); none = as the profile moves.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? How { get; set; }
+
+    /// <summary>scroll: <c>up</c> or <c>down</c>, by <see cref="Count"/> notches.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Dir { get; set; }
+
+    /// <summary>drag: <c>slow</c>, <c>mid</c> or <c>fast</c>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Speed { get; set; }
+
+    /// <summary>type: what to type; label: the heading.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Text { get; set; }
+
+    /// <summary>shift: the offset, in pixels.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Dx { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Dy { get; set; }
+
+    /// <summary>wait: <c>ms</c> or <c>s</c> - only how the interface shows the times, which stay milliseconds.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Unit { get; set; }
+
+    /// <summary>wait, holdFor: milliseconds; type: between characters; move: travel time.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Ms { get; set; }
 
-    /// <summary>wait: draw the time from <see cref="MinMs"/>..<see cref="MaxMs"/> instead.</summary>
+    /// <summary>wait, holdFor: draw the time from <see cref="MinMs"/>..<see cref="MaxMs"/> instead.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? Rand { get; set; }
 
@@ -66,14 +105,14 @@ public sealed class BlockDto
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? MaxMs { get; set; }
 
-    /// <summary>repeat: <c>fixed</c> (<see cref="Count"/> times) or <c>inf</c>.</summary>
+    /// <summary>repeat: <c>fixed</c> (<see cref="Count"/> times) or <c>inf</c>. scroll's notches are in <see cref="Count"/> too.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Mode { get; set; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? Count { get; set; }
 
-    /// <summary>repeat: the blocks inside.</summary>
+    /// <summary>repeat, random: the blocks inside.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<BlockDto>? Blocks { get; set; }
 }
@@ -158,15 +197,62 @@ public static class ScriptMapper
         switch (block)
         {
             case InputBlock input:
-                dto.Input = input.Input is { Key: not VirtualKey.None } chord
-                    ? new ChordDto(KeyCodes.ToCode(chord.Key), KeyCodes.FormatModifiers(chord.Modifiers))
-                    : null;
+                dto.Input = Chord(input.Input);
                 dto.Press = block is PressBlock && dto.Input is not null ? input.Input!.PressMs : null;
-                dto.At = input.At is { } at ? new XyDto(at.X, at.Y) : null;
+                dto.At = Xy(input.At);
+
+                if (block is PressBlock press)
+                {
+                    dto.Click = press.Click == ClickType.Double ? "double" : "single";
+                    dto.Dur = press.ProfilePress ? "profile" : "own";
+                }
+                else if (block is HoldForBlock holdFor)
+                {
+                    dto.Ms = holdFor.DurationMs;
+                    dto.Rand = holdFor.RandomizeEnabled;
+                    dto.MinMs = holdFor.MinDurationMs;
+                    dto.MaxMs = holdFor.MaxDurationMs;
+                }
+
+                break;
+
+            case ScrollBlock scroll:
+                dto.Dir = scroll.Direction == ScrollDirection.Up ? "up" : "down";
+                dto.Count = scroll.Notches;
+                dto.At = Xy(scroll.At);
+                break;
+
+            case DragBlock drag:
+                dto.Input = new ChordDto(KeyCodes.ToCode(drag.Button.ToVirtualKey()), Array.Empty<string>());
+                dto.At = new XyDto(drag.From.X, drag.From.Y);
+                dto.To = new XyDto(drag.To.X, drag.To.Y);
+                dto.Speed = drag.Speed switch
+                {
+                    DragSpeed.Slow => "slow",
+                    DragSpeed.Fast => "fast",
+                    _ => "mid",
+                };
+                break;
+
+            case TypeTextBlock type:
+                dto.Text = type.Text;
+                dto.Ms = type.CharDelayMs;
                 break;
 
             case MoveBlock move:
                 dto.To = new XyDto(move.To.X, move.To.Y);
+                dto.How = move.Movement switch
+                {
+                    MovementMode.Instant => "instant",
+                    MovementMode.Smooth => "smooth",
+                    _ => null,
+                };
+                dto.Ms = move.DurationMs;
+                break;
+
+            case ShiftBlock shift:
+                dto.Dx = shift.Dx;
+                dto.Dy = shift.Dy;
                 break;
 
             case WaitBlock wait:
@@ -174,6 +260,11 @@ public static class ScriptMapper
                 dto.Rand = wait.RandomizeEnabled;
                 dto.MinMs = wait.MinDurationMs;
                 dto.MaxMs = wait.MaxDurationMs;
+                dto.Unit = wait.InSeconds ? "s" : "ms";
+                break;
+
+            case WaitKeyBlock waitKey:
+                dto.Input = Chord(waitKey.Input);
                 break;
 
             case RepeatBlock repeat:
@@ -181,10 +272,30 @@ public static class ScriptMapper
                 dto.Count = repeat.Count;
                 dto.Blocks = ToDto(repeat.Blocks);
                 break;
+
+            case RandomBlock random:
+                dto.Blocks = ToDto(random.Blocks);
+                break;
+
+            case LabelBlock label:
+                dto.Text = label.Text;
+                break;
         }
 
         return dto;
     }
+
+    private static ChordDto? Chord(InputChord? chord) => chord is { Key: not VirtualKey.None }
+        ? new ChordDto(KeyCodes.ToCode(chord.Key), KeyCodes.FormatModifiers(chord.Modifiers))
+        : null;
+
+    private static XyDto? Xy(ScreenPoint? point) => point is { } at ? new XyDto(at.X, at.Y) : null;
+
+    private static ScreenPoint? Point(XyDto? xy) => xy is { } at ? new ScreenPoint(at.X, at.Y) : null;
+
+    private static InputChord? Chord(ChordDto? chord) => chord is not null && KeyCodes.TryGetVirtualKey(chord.Key, out var key)
+        ? new InputChord(key, KeyCodes.ParseModifiers(chord.Mods))
+        : null;
 
     private static List<ScriptBlock> FromDto(List<BlockDto> blocks, Dictionary<string, UnknownBlock> unknown) =>
         blocks.Where(b => b is not null).Select(b => FromDto(b, unknown)).ToList();
@@ -193,13 +304,21 @@ public static class ScriptMapper
     {
         ScriptBlock block = dto.Type switch
         {
-            "press" => WithInput(new PressBlock(), dto),
+            "press" => FromDto(dto, WithInput(new PressBlock(), dto)),
             "hold" => WithInput(new HoldBlock(), dto),
             "release" => WithInput(new ReleaseBlock(), dto),
-            "move" => new MoveBlock { To = dto.To is { } to ? new ScreenPoint(to.X, to.Y) : default },
+            "holdFor" => FromDto(dto, WithInput(new HoldForBlock(), dto)),
+            "scroll" => FromDto(dto, new ScrollBlock()),
+            "drag" => FromDto(dto, new DragBlock()),
+            "type" => new TypeTextBlock { Text = dto.Text ?? string.Empty, CharDelayMs = dto.Ms ?? new TypeTextBlock().CharDelayMs },
+            "move" => FromDto(dto, new MoveBlock()),
+            "shift" => new ShiftBlock { Dx = dto.Dx ?? 0, Dy = dto.Dy ?? 0 },
             "wait" => FromDto(dto, new WaitBlock()),
+            "waitKey" => new WaitKeyBlock { Input = Chord(dto.Input) },
             "repeat" => FromDto(dto, new RepeatBlock(), unknown),
+            "random" => new RandomBlock { Blocks = dto.Blocks is { } inner ? FromDto(inner, unknown) : new() },
             "stop" => new StopBlock(),
+            "label" => new LabelBlock { Text = dto.Text ?? string.Empty },
             _ => unknown.TryGetValue(dto.Id ?? string.Empty, out var kept) && kept.TypeName == dto.Type
                 ? kept.Clone()
                 : new UnknownBlock(dto.Type ?? string.Empty),
@@ -227,7 +346,63 @@ public static class ScriptMapper
         wait.RandomizeEnabled = dto.Rand ?? wait.RandomizeEnabled;
         wait.MinDurationMs = dto.MinMs ?? wait.MinDurationMs;
         wait.MaxDurationMs = dto.MaxMs ?? wait.MaxDurationMs;
+        wait.InSeconds = dto.Unit == "s";
         return wait;
+    }
+
+    private static PressBlock FromDto(BlockDto dto, PressBlock press)
+    {
+        press.Click = dto.Click == "double" ? ClickType.Double : ClickType.Single;
+        press.ProfilePress = dto.Dur == "profile";
+        return press;
+    }
+
+    private static HoldForBlock FromDto(BlockDto dto, HoldForBlock holdFor)
+    {
+        holdFor.DurationMs = dto.Ms ?? holdFor.DurationMs;
+        holdFor.RandomizeEnabled = dto.Rand ?? holdFor.RandomizeEnabled;
+        holdFor.MinDurationMs = dto.MinMs ?? holdFor.MinDurationMs;
+        holdFor.MaxDurationMs = dto.MaxMs ?? holdFor.MaxDurationMs;
+        return holdFor;
+    }
+
+    private static ScrollBlock FromDto(BlockDto dto, ScrollBlock scroll)
+    {
+        scroll.Direction = dto.Dir == "up" ? ScrollDirection.Up : ScrollDirection.Down;
+        scroll.Notches = dto.Count ?? scroll.Notches;
+        scroll.At = Point(dto.At);
+        return scroll;
+    }
+
+    private static DragBlock FromDto(BlockDto dto, DragBlock drag)
+    {
+        if (dto.Input is { } chord && KeyCodes.TryGetVirtualKey(chord.Key, out var key) && key.TryGetMouseButton(out var button))
+        {
+            drag.Button = button;
+        }
+
+        drag.From = Point(dto.At) ?? default;
+        drag.To = Point(dto.To) ?? default;
+        drag.Speed = dto.Speed switch
+        {
+            "slow" => DragSpeed.Slow,
+            "fast" => DragSpeed.Fast,
+            _ => DragSpeed.Medium,
+        };
+        return drag;
+    }
+
+    private static MoveBlock FromDto(BlockDto dto, MoveBlock move)
+    {
+        move.To = Point(dto.To) ?? default;
+        move.Movement = dto.How switch
+        {
+            "instant" => MovementMode.Instant,
+            "smooth" => MovementMode.Smooth,
+            _ => null,
+        };
+        move.DurationMs = dto.Ms ?? move.DurationMs;
+        return move;
     }
 
     private static RepeatBlock FromDto(BlockDto dto, RepeatBlock repeat, Dictionary<string, UnknownBlock> unknown)

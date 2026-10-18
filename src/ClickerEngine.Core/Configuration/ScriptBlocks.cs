@@ -47,7 +47,7 @@ public abstract class ScriptBlock
     public override string ToString() => Label is { Length: > 0 } ? $"{Type} '{Label}'" : $"{Type} {Id}";
 }
 
-/// <summary>A block that holds other blocks: today <see cref="RepeatBlock"/>, later conditions.</summary>
+/// <summary>A block that holds other blocks: <see cref="RepeatBlock"/>, <see cref="RandomBlock"/>, later conditions.</summary>
 public interface IBlockContainer
 {
     List<ScriptBlock> Blocks { get; set; }
@@ -78,12 +78,28 @@ public abstract class InputBlock : ScriptBlock
     }
 }
 
-/// <summary>«Нажать»: press and release, held for the input's own press time.</summary>
+/// <summary>«Нажать»: press and release, held for the input's own press time or the profile's.</summary>
 public sealed class PressBlock : InputBlock
 {
     public override string Type => "press";
 
-    public override ScriptBlock Clone() => CopyTo(new PressBlock());
+    /// <summary>A double click presses twice, with the profile's double-click gap between.</summary>
+    public ClickType Click { get; set; } = ClickType.Single;
+
+    /// <summary>
+    /// When true the press lasts as long as the profile's clicks do (the first clicking input
+    /// of its action list, 30 ms without one) instead of the input's own
+    /// <see cref="InputChord.PressMs"/>. Files written before this existed read as false.
+    /// </summary>
+    public bool ProfilePress { get; set; }
+
+    public override ScriptBlock Clone()
+    {
+        var clone = CopyTo(new PressBlock());
+        clone.Click = Click;
+        clone.ProfilePress = ProfilePress;
+        return clone;
+    }
 }
 
 /// <summary>«Зажать»: press and leave it down, for drags and held keys. The run releases it at the latest when it ends.</summary>
@@ -99,17 +115,139 @@ public sealed class ReleaseBlock : InputBlock
 {
     public override string Type => "release";
 
+    /// <summary>
+    /// The field a validation error names when nothing above this release holds its input
+    /// (<c>Script.Blocks[2].Held</c>).
+    /// </summary>
+    public const string HeldField = "Held";
+
     public override ScriptBlock Clone() => CopyTo(new ReleaseBlock());
 }
 
-/// <summary>«Переместить курсор»: to an absolute point, by the profile's movement settings.</summary>
+/// <summary>
+/// «Удержать»: press, keep it down for a fixed or random time, release. One action, like a
+/// «Зажать» and its «Отпустить» with a «Ждать» between, but it can never be left down.
+/// </summary>
+public sealed class HoldForBlock : InputBlock
+{
+    public override string Type => "holdFor";
+
+    /// <summary>How long to hold, in milliseconds.</summary>
+    public int DurationMs { get; set; } = 1500;
+
+    /// <summary>When true the time is drawn from [<see cref="MinDurationMs"/>, <see cref="MaxDurationMs"/>] instead.</summary>
+    public bool RandomizeEnabled { get; set; }
+
+    public int MinDurationMs { get; set; } = 1000;
+
+    public int MaxDurationMs { get; set; } = 2000;
+
+    public override ScriptBlock Clone()
+    {
+        var clone = CopyTo(new HoldForBlock());
+        clone.DurationMs = DurationMs;
+        clone.RandomizeEnabled = RandomizeEnabled;
+        clone.MinDurationMs = MinDurationMs;
+        clone.MaxDurationMs = MaxDurationMs;
+        return clone;
+    }
+}
+
+/// <summary>Which way «Прокрутить» turns the wheel.</summary>
+public enum ScrollDirection
+{
+    Down = 0,
+    Up = 1,
+}
+
+/// <summary>«Прокрутить»: the wheel up or down by a number of notches, optionally at a point.</summary>
+public sealed class ScrollBlock : ScriptBlock
+{
+    public override string Type => "scroll";
+
+    public ScrollDirection Direction { get; set; } = ScrollDirection.Down;
+
+    /// <summary>Wheel notches, at least 1.</summary>
+    public int Notches { get; set; } = 3;
+
+    /// <summary>When set, the cursor travels here first.</summary>
+    public ScreenPoint? At { get; set; }
+
+    public override ScriptBlock Clone() => (ScrollBlock)MemberwiseClone();
+}
+
+/// <summary>How fast «Перетащить» carries what it holds.</summary>
+public enum DragSpeed
+{
+    Medium = 0,
+    Slow = 1,
+    Fast = 2,
+}
+
+/// <summary>«Перетащить»: press a mouse button at one point, carry it to another, release.</summary>
+public sealed class DragBlock : ScriptBlock
+{
+    public override string Type => "drag";
+
+    public MouseButton Button { get; set; } = MouseButton.Left;
+
+    public ScreenPoint From { get; set; }
+
+    public ScreenPoint To { get; set; }
+
+    public DragSpeed Speed { get; set; } = DragSpeed.Medium;
+
+    /// <summary>How long the carry from <see cref="From"/> to <see cref="To"/> takes.</summary>
+    [JsonIgnore]
+    public int DurationMs => Speed switch
+    {
+        DragSpeed.Slow => 1000,
+        DragSpeed.Fast => 250,
+        _ => 500,
+    };
+
+    public override ScriptBlock Clone() => (DragBlock)MemberwiseClone();
+}
+
+/// <summary>«Ввести текст»: types a string character by character, whatever the keyboard layout.</summary>
+public sealed class TypeTextBlock : ScriptBlock
+{
+    public override string Type => "type";
+
+    public string Text { get; set; } = string.Empty;
+
+    /// <summary>Pause between two characters, in milliseconds.</summary>
+    public int CharDelayMs { get; set; } = 30;
+
+    public override ScriptBlock Clone() => (TypeTextBlock)MemberwiseClone();
+}
+
+/// <summary>«Переместить»: to an absolute point, instantly, smoothly, or as the profile moves.</summary>
 public sealed class MoveBlock : ScriptBlock
 {
     public override string Type => "move";
 
     public ScreenPoint To { get; set; }
 
+    /// <summary>Instant or smooth; null (files from before this existed) moves by the profile's settings.</summary>
+    public MovementMode? Movement { get; set; }
+
+    /// <summary>Travel time of a smooth move, in milliseconds.</summary>
+    public int DurationMs { get; set; } = 300;
+
     public override ScriptBlock Clone() => (MoveBlock)MemberwiseClone();
+}
+
+/// <summary>«Сдвинуть»: by an offset from wherever the cursor is when the block runs.</summary>
+public sealed class ShiftBlock : ScriptBlock
+{
+    public override string Type => "shift";
+
+    public int Dx { get; set; } = 50;
+
+    public int Dy { get; set; }
+
+    public override ScriptBlock Clone() => (ShiftBlock)MemberwiseClone();
 }
 
 /// <summary>«Ждать»: a fixed time, or a random one from a range. Replaces the automatic pause.</summary>
@@ -127,7 +265,26 @@ public sealed class WaitBlock : ScriptBlock
 
     public int MaxDurationMs { get; set; } = 1500;
 
+    /// <summary>The interface shows the times in seconds rather than milliseconds; nothing else.</summary>
+    public bool InSeconds { get; set; }
+
     public override ScriptBlock Clone() => (WaitBlock)MemberwiseClone();
+}
+
+/// <summary>«Ждать клавишу»: the run stands still until the user presses this key (or chord).</summary>
+public sealed class WaitKeyBlock : ScriptBlock
+{
+    public override string Type => "waitKey";
+
+    /// <summary>Null until the user picks a key, which fails validation.</summary>
+    public InputChord? Input { get; set; } = new(VirtualKey.Space);
+
+    public override ScriptBlock Clone()
+    {
+        var clone = (WaitKeyBlock)MemberwiseClone();
+        clone.Input = Input?.Clone();
+        return clone;
+    }
 }
 
 /// <summary>«Повторить»: the blocks inside, a number of times or until the run is stopped.</summary>
@@ -148,6 +305,31 @@ public sealed class RepeatBlock : ScriptBlock, IBlockContainer
         clone.Blocks = ScriptSettings.CloneBlocks(Blocks);
         return clone;
     }
+}
+
+/// <summary>«Случайно одно из»: each time it runs, one of its enabled blocks, picked at random.</summary>
+public sealed class RandomBlock : ScriptBlock, IBlockContainer
+{
+    public override string Type => "random";
+
+    public List<ScriptBlock> Blocks { get; set; } = new();
+
+    public override ScriptBlock Clone()
+    {
+        var clone = (RandomBlock)MemberwiseClone();
+        clone.Blocks = ScriptSettings.CloneBlocks(Blocks);
+        return clone;
+    }
+}
+
+/// <summary>«Метка»: a heading that divides the list; it does nothing when the script runs.</summary>
+public sealed class LabelBlock : ScriptBlock
+{
+    public override string Type => "label";
+
+    public string Text { get; set; } = string.Empty;
+
+    public override ScriptBlock Clone() => (LabelBlock)MemberwiseClone();
 }
 
 /// <summary>«Стоп»: ends the whole run here, every remaining pass included.</summary>
@@ -206,10 +388,18 @@ public sealed class ScriptBlockJsonConverter : JsonConverter<ScriptBlock>
         ["press"] = typeof(PressBlock),
         ["hold"] = typeof(HoldBlock),
         ["release"] = typeof(ReleaseBlock),
+        ["holdFor"] = typeof(HoldForBlock),
+        ["scroll"] = typeof(ScrollBlock),
+        ["drag"] = typeof(DragBlock),
+        ["type"] = typeof(TypeTextBlock),
         ["move"] = typeof(MoveBlock),
+        ["shift"] = typeof(ShiftBlock),
         ["wait"] = typeof(WaitBlock),
+        ["waitKey"] = typeof(WaitKeyBlock),
         ["repeat"] = typeof(RepeatBlock),
+        ["random"] = typeof(RandomBlock),
         ["stop"] = typeof(StopBlock),
+        ["label"] = typeof(LabelBlock),
     };
 
     /// <summary>The type names this build understands.</summary>

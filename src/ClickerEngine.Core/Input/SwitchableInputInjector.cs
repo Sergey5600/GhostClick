@@ -70,6 +70,10 @@ public sealed class SwitchableInputInjector : IInputInjector
     public void KeyDown(VirtualKey key) => Active.KeyDown(key);
 
     public void KeyUp(VirtualKey key) => Active.KeyUp(key);
+
+    public void Scroll(int notches) => Active.Scroll(notches);
+
+    public void TypeCharacter(char character) => Active.TypeCharacter(character);
 }
 
 /// <summary>
