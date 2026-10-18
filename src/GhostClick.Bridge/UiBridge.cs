@@ -9,6 +9,7 @@ using ClickerEngine.Core.Input;
 using ClickerEngine.Core.Planning;
 using ClickerEngine.Core.Points;
 using ClickerEngine.Core.Profiles;
+using GhostClick.Bridge.Updates;
 
 namespace GhostClick.Bridge;
 
@@ -58,6 +59,8 @@ public sealed class UiBridge : IDisposable
     private readonly IUiChannel _channel;
     private readonly IUiSettingsStore _settingsStore;
     private readonly Func<DateTime> _now;
+    private readonly Updater? _updater;
+    private readonly IUpdateHost? _updateHost;
     private readonly Stopwatch _runTime = new();
     private readonly List<object> _pendingLogs = new();
 
@@ -74,17 +77,33 @@ public sealed class UiBridge : IDisposable
     private bool _hotkeysAvailable = true;
     private bool _disposed;
 
+    // The scenario editor's test run: a dry run of the script, on a copy of the profile.
+    private bool _testing;
+    private bool _dryRunBeforeTest;
+
+    // Updates: what was found, the download under way, the installer once it is ready.
+    private bool _updateChecked;
+    private UpdateInfo? _update;
+    private CancellationTokenSource? _download;
+    private string? _setupPath;
+    private long _progressSentAt;
+
     /// <summary>
     /// <paramref name="settings"/> is where the interface language is kept between runs; in
-    /// memory when omitted.
+    /// memory when omitted. With an <paramref name="updater"/> and an
+    /// <paramref name="updateHost"/> the page is offered newer versions.
     /// </summary>
     public UiBridge(
         ClickerHost host,
         SwitchableInputInjector injector,
         IUiChannel channel,
         Func<DateTime>? now = null,
-        IUiSettingsStore? settings = null)
+        IUiSettingsStore? settings = null,
+        Updater? updater = null,
+        IUpdateHost? updateHost = null)
     {
+        _updater = updateHost is null ? null : updater;
+        _updateHost = updateHost;
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _injector = injector ?? throw new ArgumentNullException(nameof(injector));
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
@@ -177,6 +196,7 @@ public sealed class UiBridge : IDisposable
         }
 
         _disposed = true;
+        _download?.Cancel();
 
         if (_started)
         {
@@ -237,6 +257,31 @@ public sealed class UiBridge : IDisposable
             case "setLanguage":
                 SetLanguage(ReadString(message, "lang"));
                 break;
+            case "testRun":
+                StartTest(ReadString(message, "from"));
+                break;
+            case "testStop":
+                if (_testing)
+                {
+                    _host.Engine.Stop();
+                }
+
+                break;
+            case "updateStart":
+                StartDownload();
+                break;
+            case "updateCancel":
+                _download?.Cancel();
+                break;
+            case "updateSkip":
+                SkipUpdate();
+                break;
+            case "updateRestart":
+                InstallUpdate(relaunch: true);
+                break;
+            case "updateOnExit":
+                InstallUpdate(relaunch: false);
+                break;
         }
     }
 
@@ -271,6 +316,250 @@ public sealed class UiBridge : IDisposable
         }
 
         _pendingLogs.Clear();
+
+        if (_testing)
+        {
+            Send(new { type = "test", active = true });
+        }
+
+        // A page that reloads finds the update where it was.
+        if (_setupPath is not null)
+        {
+            Send(new { type = "updateReady", version = _update!.Version });
+        }
+        else if (_update is not null && _download is null)
+        {
+            SendUpdateAvailable();
+        }
+
+        CheckForUpdate();
+    }
+
+    // ------------------------------------------------------------------ test run
+
+    /// <summary>
+    /// «Тестовый прогон» / «Запустить отсюда»: the script runs in dry run - nothing reaches the
+    /// system - from the top or from block <paramref name="from"/>, with the run's usual block
+    /// reports. A problem in a block names it (<c>testError</c>) instead of starting.
+    /// </summary>
+    private void StartTest(string? from)
+    {
+        if (_host.Engine.IsActive)
+        {
+            return;
+        }
+
+        var test = ProfileMapper.ToEngineProfile(Current).Clone();
+        test.Kind = ProfileKind.Script;
+        test.Script.StartBlockId = string.IsNullOrEmpty(from) ? null : from;
+
+        // The run is watched on screen and stopped by hand; nothing in it is real.
+        test.Safety.MaxRunDurationSeconds = 0;
+        test.Safety.StopOnUserCursorMove = false;
+
+        var errors = ProfileValidator.Validate(test);
+        if (errors.Count > 0)
+        {
+            var block = errors.Where(e => e.BlockId is not null).Select(e => e.BlockId).FirstOrDefault();
+            Send(new { type = "testError", block, message = Describe(errors, test.Script) });
+            return;
+        }
+
+        _dryRunBeforeTest = _injector.DryRun;
+        _injector.DryRun = true;
+        _host.Engine.Profile = test;
+
+        try
+        {
+            _testing = true;
+            _host.Engine.Start();
+        }
+        catch (ProfileValidationException ex)
+        {
+            EndTest();
+            Send(new { type = "testError", block = ex.Errors.Where(e => e.BlockId is not null).Select(e => e.BlockId).FirstOrDefault(), message = Describe(ex, test.Script) });
+            return;
+        }
+
+        Send(new { type = "test", active = true });
+    }
+
+    /// <summary>Back to the profile and the dry-run switch as they were before the test.</summary>
+    private void EndTest()
+    {
+        _testing = false;
+        _injector.DryRun = _dryRunBeforeTest;
+        _injector.ResetDryRunCursor();
+        ApplyToEngine();
+    }
+
+    // ------------------------------------------------------------------ updates
+
+    /// <summary>Once per start, in the background: a newer release, unless the user skipped it.</summary>
+    private void CheckForUpdate()
+    {
+        if (_updater is null || _updateChecked || !_updater.ChecksAutomatically)
+        {
+            return;
+        }
+
+        _updateChecked = true;
+        _updater.CleanUp();
+        var updater = _updater;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var found = await updater.CheckAsync().ConfigureAwait(false);
+                _channel.Post(() => OnUpdateFound(found));
+            }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException or IOException)
+            {
+                // Offline, or GitHub is down: worth a line in the log, not a word more.
+                _channel.Post(() => Log(_text.UpdateCheckFailed + ex.Message));
+            }
+        });
+    }
+
+    private void OnUpdateFound(UpdateInfo? found)
+    {
+        if (_disposed || found is null || found.Version == _settings.SkippedVersion)
+        {
+            return;
+        }
+
+        _update = found;
+        Log(_text.UpdateFound(found.Version));
+        SendUpdateAvailable();
+    }
+
+    private void SendUpdateAvailable() => Send(new
+    {
+        type = "updateAvailable",
+        version = _update!.Version,
+        sizeMb = Math.Round(_update.SetupSize / 1048576.0, 1),
+    });
+
+    private void StartDownload()
+    {
+        if (_updater is null || _update is null || _download is not null || _setupPath is not null)
+        {
+            return;
+        }
+
+        var update = _update;
+        var updater = _updater;
+        var download = new CancellationTokenSource();
+        _download = download;
+
+        var progress = new CallbackProgress(received =>
+        {
+            // Many reports a second; the page gets a few.
+            long now = Environment.TickCount64;
+            if (now - Interlocked.Read(ref _progressSentAt) < 100 && received < update.SetupSize)
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref _progressSentAt, now);
+            _channel.Post(() => SendProgress(received, update.SetupSize));
+        });
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var path = await updater.DownloadAsync(update, progress, download.Token).ConfigureAwait(false);
+                _channel.Post(() =>
+                {
+                    _download = null;
+                    _setupPath = path;
+                    Send(new { type = "updateReady", version = update.Version });
+                });
+            }
+            catch (OperationCanceledException) when (download.IsCancellationRequested)
+            {
+                _channel.Post(() => _download = null);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException or UnauthorizedAccessException or UpdateChecksumException or TaskCanceledException)
+            {
+                _channel.Post(() =>
+                {
+                    _download = null;
+                    var reason = ex is UpdateChecksumException ? _text.UpdateBadChecksum : ex.Message;
+                    Log(_text.UpdateFailed + reason);
+                    Send(new { type = "updateFailed", message = _text.UpdateFailed + reason });
+                });
+            }
+        });
+    }
+
+    private void SendProgress(long received, long total)
+    {
+        if (_download is null)
+        {
+            return;
+        }
+
+        double size = total > 0 ? total : Math.Max(received, 1);
+        Send(new
+        {
+            type = "updateProgress",
+            pct = Math.Min(100, Math.Round(received * 100.0 / size, 1)),
+            mb = Math.Round(received / 1048576.0, 1),
+            totalMb = Math.Round(size / 1048576.0, 1),
+        });
+    }
+
+    private void SkipUpdate()
+    {
+        if (_update is null)
+        {
+            return;
+        }
+
+        _download?.Cancel();
+        _settings.SkippedVersion = _update.Version;
+        _update = null;
+
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log(_text.LanguageNotSaved + ex.Message);
+        }
+    }
+
+    /// <summary>The installer runs when GhostClick closes - now, with a restart, or whenever the user quits.</summary>
+    private void InstallUpdate(bool relaunch)
+    {
+        if (_updateHost is null || _setupPath is null)
+        {
+            return;
+        }
+
+        _updateHost.InstallOnExit(_setupPath, relaunch);
+        if (relaunch)
+        {
+            _updateHost.Exit();
+        }
+        else
+        {
+            Log(_text.UpdateScheduled(_update!.Version));
+        }
+    }
+
+    /// <summary>Reports straight away on the downloading thread, unlike <see cref="Progress{T}"/>, which queues every report.</summary>
+    private sealed class CallbackProgress : IProgress<long>
+    {
+        private readonly Action<long> _report;
+
+        public CallbackProgress(Action<long> report) => _report = report;
+
+        public void Report(long value) => _report(value);
     }
 
     // ------------------------------------------------------------------ running
@@ -294,6 +583,14 @@ public sealed class UiBridge : IDisposable
 
     private void SetDryRun(bool value)
     {
+        // A test run is always dry; the switch takes effect once it is over.
+        if (_testing)
+        {
+            _dryRunBeforeTest = value;
+            _host.Engine.Stop();
+            return;
+        }
+
         if (_injector.DryRun == value)
         {
             return;
@@ -614,6 +911,13 @@ public sealed class UiBridge : IDisposable
     {
         _runTime.Stop();
         SendBlock(null);
+
+        if (_testing)
+        {
+            EndTest();
+            Send(new { type = "test", active = false, completed = e.Reason == StopReason.Completed });
+        }
+
         Log($"{StopReasonText(e)} · {e.ActionsPerformed} {_text.Clicks(e.ActionsPerformed)}");
 
         if (e.Reason == StopReason.Error)
@@ -673,7 +977,18 @@ public sealed class UiBridge : IDisposable
     private List<IssueDto> TrackIssues()
     {
         var script = Current.Script;
-        var issues = ProfileValidator.Validate(Current)
+        var errors = ProfileValidator.Validate(Current).ToList();
+
+        // A clicker keeps a script too, and the editor marks its blocks whatever the profile
+        // type is: the test run plays them either way.
+        if (Current.Kind != ProfileKind.Script)
+        {
+            var asScript = Current.Clone();
+            asScript.Kind = ProfileKind.Script;
+            errors.AddRange(ProfileValidator.Validate(asScript).Where(e => e.BlockId is not null));
+        }
+
+        var issues = errors
             .Select(e => ScriptTexts.Issue(e, ScriptTexts.Message(e, script) ?? Describe(new[] { e })))
             .ToList();
 

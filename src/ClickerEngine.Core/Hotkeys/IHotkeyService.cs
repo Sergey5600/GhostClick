@@ -65,11 +65,13 @@ public interface IHotkeyService : IDisposable
 /// A hotkey service that fires only when told to. The dev UI uses it for its on-screen
 /// buttons and the tests use it to drive the engine deterministically.
 /// </summary>
-public sealed class ManualHotkeyService : IHotkeyService
+public sealed class ManualHotkeyService : IHotkeyService, IKeyPressSource
 {
     private HotkeySettings _settings = new();
 
     public event EventHandler<HotkeyEventArgs>? HotkeyTriggered;
+
+    public event EventHandler<KeyPressedEventArgs>? KeyPressed;
 
     public bool IsRunning { get; private set; }
 
@@ -92,6 +94,10 @@ public sealed class ManualHotkeyService : IHotkeyService
     /// <summary>Raises a single press or release.</summary>
     public void Trigger(HotkeyAction action, bool isPressed) =>
         HotkeyTriggered?.Invoke(this, new HotkeyEventArgs(action, BindingFor(action), isPressed));
+
+    /// <summary>Reports a key press, as if the user had pressed it.</summary>
+    public void PressKey(VirtualKey key, KeyModifiers modifiers = KeyModifiers.None) =>
+        KeyPressed?.Invoke(this, new KeyPressedEventArgs(key, modifiers));
 
     public void Dispose() => Stop();
 

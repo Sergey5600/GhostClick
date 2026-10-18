@@ -36,7 +36,11 @@ public sealed class ClickerHost : IDisposable
         Hotkeys = hotkeyService ?? throw new ArgumentNullException(nameof(hotkeyService));
 
         Screen = screen ?? CreateDefaultScreen();
-        Engine = new AutoClickerEngine(injector, clock, Screen, random, windowProbe);
+        Engine = new AutoClickerEngine(injector, clock, Screen, random, windowProbe)
+        {
+            // What a script's «Ждать клавишу» listens to; the hotkey hook sees every key.
+            KeyPresses = hotkeyService as IKeyPressSource,
+        };
         Profiles = new ProfileManager(profileStore);
         Recorder = new PointRecorder(injector);
         Controller = new HotkeyController(Hotkeys, Engine, Recorder);

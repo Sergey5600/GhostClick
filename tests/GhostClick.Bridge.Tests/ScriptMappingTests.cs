@@ -33,16 +33,16 @@ public class ScriptMappingTests
         Assert.Equal(75, script["stepDelay"]!.GetValue<int>());
 
         Assert.Equal(
-            """{"type":"press","id":"p","enabled":true,"label":"Клик","input":{"mods":["Ctrl","Shift"],"key":"KeyE"},"press":30,"at":{"x":10,"y":20}}""",
+            """{"type":"press","id":"p","enabled":true,"label":"Клик","input":{"mods":["Ctrl","Shift"],"key":"KeyE"},"press":30,"click":"single","dur":"own","at":{"x":10,"y":20}}""",
             Compact(blocks[0]));
         Assert.Equal(
             """{"type":"hold","id":"h","enabled":true,"label":null,"input":{"mods":[],"key":"Mouse4"}}""",
             Compact(blocks[1]));
         Assert.Equal(
-            """{"type":"move","id":"m","enabled":true,"label":null,"to":{"x":640,"y":480}}""",
+            """{"type":"move","id":"m","enabled":true,"label":null,"to":{"x":640,"y":480},"ms":300}""",
             Compact(blocks[2]));
         Assert.Equal(
-            """{"type":"wait","id":"w","enabled":true,"label":null,"ms":300,"rand":true,"minMs":100,"maxMs":900}""",
+            """{"type":"wait","id":"w","enabled":true,"label":null,"unit":"ms","ms":300,"rand":true,"minMs":100,"maxMs":900}""",
             Compact(blocks[3]));
         Assert.Equal(
             """{"type":"repeat","id":"r","enabled":true,"label":null,"mode":"inf","count":2,"blocks":[{"type":"stop","id":"s","enabled":false,"label":null}]}""",

@@ -349,6 +349,10 @@ public class HoldTests
         public void KeyDown(VirtualKey key) => _inner.KeyDown(key);
 
         public void KeyUp(VirtualKey key) => _inner.KeyUp(key);
+
+        public void Scroll(int notches) => _inner.Scroll(notches);
+
+        public void TypeCharacter(char character) => _inner.TypeCharacter(character);
     }
 
     private sealed class FakeWindowProbe : IWindowProbe

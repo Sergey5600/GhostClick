@@ -1,4 +1,5 @@
 using ClickerEngine.Core.Configuration;
+using ClickerEngine.Core.Hotkeys;
 using ClickerEngine.Core.Input;
 using ClickerEngine.Core.Motion;
 using ClickerEngine.Core.Planning;
@@ -156,6 +157,12 @@ public sealed class AutoClickerEngine : IDisposable
     /// over other windows on the way; without this the first of them would get the click.
     /// </summary>
     public TimeSpan WindowSettleTime { get; set; } = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>
+    /// The user's key presses, which a script's «Ждать клавишу» waits for. Without one such a
+    /// block ends the run with an error.
+    /// </summary>
+    public IKeyPressSource? KeyPresses { get; set; }
 
     /// <summary>The injector backend in use, for display.</summary>
     public IInputInjector Injector => _injector;
@@ -582,7 +589,9 @@ public sealed class AutoClickerEngine : IDisposable
         switch (step.Kind)
         {
             case EngineStepKind.Wait:
-                if (context.InAction || context.Held.Length == 0)
+                // A script holds what its «Зажать» pressed across waits; a pause must let go
+                // of it at once, as a clicker does with its inputs held for the run.
+                if (!context.IsScript && (context.InAction || context.Held.Length == 0))
                 {
                     _clock.Wait(step.Delay, token);
                 }
@@ -626,6 +635,19 @@ public sealed class AutoClickerEngine : IDisposable
 
                 break;
 
+            case EngineStepKind.Scroll:
+                _injector.Scroll(step.Notches);
+                break;
+
+            case EngineStepKind.Text:
+                _injector.TypeCharacter(step.Character);
+                Statistics.RecordKeyPress();
+                break;
+
+            case EngineStepKind.WaitForKey:
+                WaitForKey(step.Chord!, profile, context, token);
+                break;
+
             case EngineStepKind.Tick:
                 // Nothing to press: every input is held for the run. It still counts.
                 break;
@@ -653,6 +675,57 @@ public sealed class AutoClickerEngine : IDisposable
             context.Actions,
             context.HasCommandedMove ? context.LastCommandedPosition : _injector.GetCursorPosition(),
             mouse ? ActionKind.Mouse : ActionKind.Keyboard));
+    }
+
+    /// <summary>
+    /// Stands still until the user presses <paramref name="chord"/>. A pause meanwhile is sat
+    /// out like any other (presses during it do not count), a stop ends the wait at once.
+    /// </summary>
+    private void WaitForKey(InputChord chord, ClickerProfile profile, RunContext context, CancellationToken token)
+    {
+        var source = KeyPresses ?? throw new InvalidOperationException("Waiting for a key needs the hotkey listener, which is not running.");
+        using var pressed = new ManualResetEventSlim(false);
+
+        void OnKey(object? sender, KeyPressedEventArgs e)
+        {
+            if (e.Matches(chord))
+            {
+                pressed.Set();
+            }
+        }
+
+        source.KeyPressed += OnKey;
+        try
+        {
+            while (true)
+            {
+                using (var wake = CancellationTokenSource.CreateLinkedTokenSource(token, PauseToken()))
+                {
+                    try
+                    {
+                        pressed.Wait(wake.Token);
+                        break;
+                    }
+                    catch (OperationCanceledException) when (!token.IsCancellationRequested)
+                    {
+                        // Paused; handled below, once the linked source is gone.
+                    }
+                }
+
+                SitOutPause(profile, context, token);
+                pressed.Reset();
+            }
+        }
+        finally
+        {
+            source.KeyPressed -= OnKey;
+        }
+
+        // The user had the mouse while we waited; where it is now is where the script carries on.
+        if (context.ExpectedCursor is not null)
+        {
+            context.ExpectedCursor = _injector.GetCursorPosition();
+        }
     }
 
     /// <summary>Publishes the script block a step belongs to, once per execution of the block.</summary>
@@ -710,7 +783,15 @@ public sealed class AutoClickerEngine : IDisposable
     private void SitOutPause(ClickerProfile profile, RunContext context, CancellationToken token)
     {
         ReleaseHeldWhileRunning(context);
+        (MouseButton[] Buttons, VirtualKey[] Keys)? scriptHeld = context.IsScript ? ReleaseScriptHeld(context) : null;
         _pauseGate.Wait(token);
+
+        // What the script's blocks held goes down again where it was: a «Зажать W» before
+        // the pause still walks after it.
+        if (scriptHeld is not null)
+        {
+            PressScriptHeld(context, scriptHeld.Value);
+        }
 
         lock (_sync)
         {
@@ -721,6 +802,46 @@ public sealed class AutoClickerEngine : IDisposable
         if (context.Held.Length > 0 && context.HeldEverPressed && TryGetTargetWindow(default, profile, context, out _))
         {
             PressHeldWhileRunning(context);
+        }
+    }
+
+    /// <summary>
+    /// Releases everything a script's blocks hold down («Зажать», «Удержать», «Перетащить»):
+    /// buttons, then keys, modifiers last. Returns what was released, to press again.
+    /// </summary>
+    private (MouseButton[] Buttons, VirtualKey[] Keys) ReleaseScriptHeld(RunContext context)
+    {
+        var buttons = context.HeldButtons.ToArray();
+        var keys = context.HeldKeys.OrderBy(k => k.ToModifierFlag() != KeyModifiers.None).ToArray();
+
+        foreach (var button in buttons)
+        {
+            context.HeldButtons.Remove(button);
+            _injector.MouseButtonUp(button);
+        }
+
+        foreach (var key in keys)
+        {
+            context.HeldKeys.Remove(key);
+            _injector.KeyUp(key);
+        }
+
+        return (buttons, keys);
+    }
+
+    /// <summary>Presses again what <see cref="ReleaseScriptHeld"/> let go of: modifiers first, then keys, then buttons.</summary>
+    private void PressScriptHeld(RunContext context, (MouseButton[] Buttons, VirtualKey[] Keys) held)
+    {
+        for (int i = held.Keys.Length - 1; i >= 0; i--)
+        {
+            context.HeldKeys.Add(held.Keys[i]);
+            _injector.KeyDown(held.Keys[i]);
+        }
+
+        foreach (var button in held.Buttons)
+        {
+            context.HeldButtons.Add(button);
+            _injector.MouseButtonDown(button);
         }
     }
 

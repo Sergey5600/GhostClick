@@ -4,7 +4,8 @@
 // plain browser it gets a preview host instead: the same protocol, answered in memory, with
 // simulated clicks - enough to review and test the interface without Windows. Scripts run
 // here too, block by block, with the same "block" and "issues" messages as the bridge (see
-// docs/scripts-ui-contract.md).
+// docs/scripts-ui-contract.md), and so does the editor's test run. Open the page with
+// ?update=1.4.0 to see the update dialog.
 (function () {
   'use strict';
 
@@ -111,6 +112,30 @@
     return profile;
   }
 
+  // The design's example: a label, a key to wait for, a repeat of the new blocks.
+  function shopScript() {
+    const profile = defaultScript();
+    profile.script = {
+      repeat: 'fixed', count: 3, stepDelay: 50,
+      blocks: [
+        block('label', null, { text: '— Подготовка —' }),
+        block('waitKey', 'Встаньте у прилавка и нажмите Space', { input: key('Space') }),
+        block('hold', null, { input: key('KeyW') }),
+        block('repeat', null, {
+          mode: 'fixed', count: 10,
+          blocks: [
+            block('press', null, { input: key('Mouse1'), click: 'single', dur: 'profile', press: 30, at: { x: 1240, y: 612 } }),
+            block('holdFor', 'Собрать предмет', { input: key('KeyE'), ms: 1500, rand: false, minMs: 1000, maxMs: 2000 }),
+            block('wait', null, { ms: 500, rand: true, minMs: 400, maxMs: 700, unit: 'ms' }),
+            { ...block('scroll', null, { dir: 'down', count: 3, at: null }), enabled: false },
+          ],
+        }),
+        block('release', null, { input: key('KeyW') }),
+      ],
+    };
+    return profile;
+  }
+
   // Shows the error state: a press without a key and a repeat without a count.
   function draftScript() {
     const profile = defaultScript();
@@ -122,12 +147,15 @@
   }
 
   const TITLES = {
-    press: 'Нажать', hold: 'Зажать', release: 'Отпустить', move: 'Переместить курсор',
-    wait: 'Ждать', repeat: 'Повторить', stop: 'Стоп',
+    press: 'Нажать', hold: 'Зажать', release: 'Отпустить', holdFor: 'Удержать', scroll: 'Прокрутить',
+    drag: 'Перетащить', type: 'Ввести текст', move: 'Переместить', shift: 'Сдвинуть', wait: 'Ждать',
+    waitKey: 'Ждать клавишу', repeat: 'Повторить', random: 'Случайно одно из', stop: 'Стоп', label: 'Метка',
   };
 
   const isInput = type => type === 'press' || type === 'hold' || type === 'release';
+  const isContainer = type => type === 'repeat' || type === 'random';
   const enabled = list => (list || []).filter(b => b && b.enabled !== false);
+  const sameKey = (a, b) => !!a && !!b && a.key === b.key && a.mods.slice().sort().join() === b.mods.slice().sort().join();
 
   // The same checks, in the same order and words, as the engine's validator and the bridge.
   function scriptIssues(script) {
@@ -140,6 +168,7 @@
     if (script.stepDelay < 0) add(null, null, 'stepDelay', 'Пауза между шагами не может быть отрицательной');
 
     const ids = new Set();
+    const held = [];
     const check = (list, path, live) => (list || []).forEach((b, i) => {
       const at = [...path, i];
       if (!b) return add(null, at, null, 'Пустой блок');
@@ -150,20 +179,36 @@
 
       const on = live && b.enabled !== false;
       const fail = (field, message) => add(b.id || null, at, field, message);
-      if (on && isInput(b.type)) {
-        if (!b.input || !b.input.key) fail('input', 'Выберите клавишу или кнопку мыши');
-      } else if (on && b.type === 'wait') {
+      const timing = () => {
         if (!b.rand && b.ms < 0) fail('ms', 'Время ожидания не может быть отрицательным');
         if (b.rand && b.minMs < 0) fail('minMs', 'Минимальное время ожидания не может быть отрицательным');
         if (b.rand && b.maxMs < b.minMs) fail('maxMs', 'Максимальное время ожидания меньше минимального');
+      };
+      if (on && (isInput(b.type) || b.type === 'holdFor' || b.type === 'waitKey')) {
+        if (!b.input || !b.input.key) fail('input', b.type === 'waitKey' ? 'Выберите клавишу' : 'Выберите клавишу или кнопку мыши');
+        if (b.type === 'holdFor') timing();
+        if (b.type === 'hold' && b.input && b.input.key) held.push(b.input);
+        if (b.type === 'release' && b.input && b.input.key) {
+          const k = held.findIndex(x => sameKey(x, b.input));
+          if (k >= 0) held.splice(k, 1);
+          else fail('held', held.length ? `${b.input.key} не зажата выше по сценарию` : 'Выше по сценарию ничего не зажато');
+        }
+      } else if (on && b.type === 'wait') {
+        timing();
       } else if (on && b.type === 'repeat') {
         if (b.mode !== 'inf' && !(b.count >= 1)) fail('count', 'Количество повторов должно быть не меньше 1');
         if (!enabled(b.blocks).length) fail('blocks', 'Внутри повтора нет включённых блоков');
-      } else if (on && b.type !== 'move' && b.type !== 'stop') {
+      } else if (on && b.type === 'random') {
+        if (!enabled(b.blocks).length) fail('blocks', 'Внутри нет включённых блоков');
+      } else if (on && b.type === 'type') {
+        if (!b.text) fail('text', 'Пустой текст');
+      } else if (on && b.type === 'scroll') {
+        if (!(b.count >= 1)) fail('count', 'Прокрутите хотя бы на один щелчок');
+      } else if (on && !['move', 'stop', 'drag', 'shift', 'label'].includes(b.type)) {
         fail('type', b.type ? 'Этот блок не поддерживается этой версией GhostClick' : 'У блока не указан тип');
       }
 
-      if (b.type === 'repeat') check(b.blocks, at, on);
+      if (isContainer(b.type)) check(b.blocks, at, on);
     });
     check(script.blocks, [], true);
     return issues;
@@ -173,7 +218,7 @@
     for (const b of list || []) {
       if (!b) continue;
       if (b.id === id) return b;
-      const inner = findBlock(b.blocks, id);
+      const inner = isContainer(b.type) ? findBlock(b.blocks, id) : null;
       if (inner) return inner;
     }
     return null;
@@ -182,9 +227,10 @@
   // The plan of a run, one step at a time, like GhostClick.Core's ScriptPlanner: blocks top to
   // bottom, the automatic pause between steps unless a «Ждать» stands in for it, repeats,
   // passes, «Стоп». A step is { block: where it is | null for the pause, ms, action }.
-  function* planScript(script) {
-    const state = { pauseDue: false, stopped: false, steps: 0 };
-    const passes = script.repeat === 'once' ? 1 : script.repeat === 'fixed' ? Math.max(1, script.count) : null;
+  function* planScript(script, start) {
+    const state = { pauseDue: false, stopped: false, steps: 0, seeking: start || null };
+    const passes = start ? 1 : script.repeat === 'once' ? 1 : script.repeat === 'fixed' ? Math.max(1, script.count) : null;
+    const holds = b => b.id === state.seeking || (isContainer(b.type) && (b.blocks || []).some(holds));
 
     for (let pass = 1; passes === null || pass <= passes; pass++) {
       const before = state.steps;
@@ -196,12 +242,21 @@
     function* planBlocks(list, frame) {
       for (const b of enabled(list)) {
         if (state.stopped) return;
+        if (state.seeking) {
+          if (b.id === state.seeking) state.seeking = null;
+          else if (!holds(b)) continue;
+        }
         if (b.type === 'stop') {
           state.stopped = true;
           return;
         }
         if (b.type === 'repeat') yield* planRepeat(b, frame);
-        else yield* planStep(b, frame);
+        else if (b.type === 'random') {
+          const choices = enabled(b.blocks);
+          if (!choices.length) continue;
+          const pick = state.seeking ? choices.find(holds) : choices[Math.floor(Math.random() * choices.length)];
+          yield* planBlocks([pick], frame);
+        } else yield* planStep(b, frame);
       }
     }
 
@@ -223,14 +278,23 @@
         yield { block: at, ms: Math.max(0, ms), action: false };
         return;
       }
-      if (!isInput(b.type) && b.type !== 'move') return;
+      if (b.type === 'label' || !TITLES[b.type]) return;
 
       if (state.pauseDue && script.stepDelay > 0) {
         state.steps++;
         yield { block: null, ms: script.stepDelay, action: false };
       }
       state.steps++;
-      yield { block: at, ms: b.type === 'press' ? (b.press ?? 30) : 0, action: b.type === 'press' || b.type === 'release' };
+      const avg = (x, y) => x + Math.random() * Math.max(0, y - x);
+      const ms = {
+        press: (b.click === 'double' ? 2 : 1) * (b.dur === 'profile' ? 30 : b.press ?? 30),
+        holdFor: b.rand ? avg(b.minMs, b.maxMs) : b.ms,
+        drag: { slow: 1000, mid: 500, fast: 250 }[b.speed] || 500,
+        type: (b.text || '').length * (b.ms || 0),
+        move: b.how === 'smooth' ? b.ms || 0 : 0,
+      }[b.type] || 0;
+      const action = ['press', 'release', 'holdFor', 'scroll', 'drag', 'type'].includes(b.type);
+      yield { block: at, ms, action, waitKey: b.type === 'waitKey' ? b.input : null };
       state.pauseDue = true;
     }
   }
@@ -247,6 +311,7 @@
     saved['Рыбалка — сценарий'] = fishingScript();
     saved['Ферма — сценарий'] = farmScript();
     saved['Черновик сценария'] = draftScript();
+    saved['Магазин — сценарий'] = shopScript();
 
     let name = 'Default';
     let current = clone(saved.Default);
@@ -265,6 +330,13 @@
     let pendingLeft = 0;
     let pendingAt = 0;
     let runningBlock = null;
+    // The editor's test run: a dry run of the script, from the top or from a block.
+    let testing = false;
+    let dryBeforeTest = false;
+    let waitingKey = null;
+    // The update dialog's simulation (?update=X.Y.Z).
+    const updateVersion = new URLSearchParams(location.search).get('update');
+    let updateTimer = 0;
 
     // The host writes its log lines and notices in the interface language, as the real one does.
     const T = (key, ...args) => window.GC_I18N.t(key, ...args);
@@ -289,7 +361,8 @@
 
     // Problems with the current profile, as the bridge reports them: a script's by block.
     function issues() {
-      const list = isScript() ? scriptIssues(current.script) : [];
+      // A clicker's blocks are marked too: the editor's test run plays them either way.
+      const list = isScript() ? scriptIssues(current.script) : scriptIssues(current.script).filter(i => i.block);
       const problem = validateClicker();
       if (problem) list.push({ block: null, path: null, field: null, message: problem });
       sentIssues = JSON.stringify(list);
@@ -363,7 +436,13 @@
         pending = next.value;
         pendingLeft = pending.ms;
         if (pending.block) showBlock(pending.block);
+        // «Ждать клавишу»: stands still until the page reports that key.
+        if (pending.waitKey) {
+          waitingKey = pending.waitKey;
+          return;
+        }
       }
+      if (waitingKey) return;
       pendingAt = Date.now();
       timer = setTimeout(() => {
         if (pending.action) clicks += 1;
@@ -372,15 +451,15 @@
       }, pendingLeft);
     }
 
-    function start() {
+    function start(from) {
       if (run !== 'stopped') return;
       const problem = validate();
       if (problem) return toast(problem, true);
       run = 'running'; clicks = 0; elapsed = 0; resumedAt = Date.now();
       const fmt = c => [...c.mods, window.GC_LAYOUT.label(c.key)].join(' + ');
-      if (isScript()) {
-        const n = (function count(list) { return enabled(list).reduce((all, b) => all + 1 + count(b.blocks), 0); })(current.script.blocks);
-        plan = planScript(clone(current.script));
+      if (isScript() || testing) {
+        const n = (function count(list) { return enabled(list).reduce((all, b) => all + 1 + (isContainer(b.type) ? count(b.blocks) : 0), 0); })(current.script.blocks);
+        plan = planScript(clone(current.script), from);
         log(`${T('start')} · ${T('scriptSummary', n)}${dryRun ? ' · dry run' : ''}`);
       } else {
         log(`${T('start')} · ${current.actions.map(fmt).join(' + ') || T('noActions')}${dryRun ? ' · dry run' : ''}`);
@@ -394,10 +473,15 @@
       if (run === 'stopped') return;
       clearTimeout(timer); clearInterval(ticker);
       elapsed = elapsedMs(); run = 'stopped';
-      plan = null; pending = null;
+      plan = null; pending = null; waitingKey = null;
       showBlock(null);
       log(`${reason} · ${T('nClicks', clicks)}`);
       emit(state());
+      if (testing) {
+        testing = false;
+        dryRun = dryBeforeTest;
+        emit({ type: 'test', active: false, completed: reason === T('done') });
+      }
     }
 
     function pause() {
@@ -432,8 +516,9 @@
           runtime: state(), dryRun, backend: 'Preview', hotkeys: false, lang,
         });
         log(T('profLoaded', name));
+        if (updateVersion) setTimeout(() => emit({ type: 'updateAvailable', version: updateVersion, sizeMb: 18.4 }), 600);
       },
-      start, pause, resume,
+      start: () => start(), pause, resume,
       stop: () => stop(T('stopped')),
       panic: () => stop(T('s_panic')),
       setProfile(m) {
@@ -474,6 +559,34 @@
         log(T('profCopied', next, source));
       },
       setDryRun(m) { if (run !== 'stopped') stop(T('stopped')); dryRun = !!m.value; },
+      testRun(m) {
+        if (run !== 'stopped') return;
+        const first = scriptIssues(current.script).find(i => i.block);
+        if (first) return emit({ type: 'testError', block: first.block, message: first.message });
+        testing = true;
+        dryBeforeTest = dryRun;
+        dryRun = true;
+        emit({ type: 'test', active: true });
+        start(m.from);
+      },
+      testStop() { if (testing) stop(T('stopped')); },
+      updateStart() {
+        let received = 0;
+        const total = 18.4;
+        clearInterval(updateTimer);
+        updateTimer = setInterval(() => {
+          received = Math.min(total, received + 0.4 + Math.random());
+          emit({ type: 'updateProgress', pct: Math.round((received / total) * 1000) / 10, mb: Math.round(received * 10) / 10, totalMb: total });
+          if (received >= total) {
+            clearInterval(updateTimer);
+            emit({ type: 'updateReady', version: updateVersion });
+          }
+        }, 120);
+      },
+      updateCancel() { clearInterval(updateTimer); },
+      updateSkip() {},
+      updateOnExit() { log(`Версия ${updateVersion} установится при выходе`); },
+      updateRestart() { toast(`Preview: GhostClick ${updateVersion} would install now`); },
       setLanguage(m) {
         if (!window.GC_I18N.LANGS.includes(m.lang)) return;
         lang = m.lang;
@@ -487,6 +600,14 @@
       send(message) { const handler = handlers[message && message.type]; if (handler) handler(message); },
       listen(callback) { listeners.push(callback); },
       // There are no global hooks in a browser; the page calls these for the hotkeys it sees.
+      // A key the page saw: what a script's «Ждать клавишу» waits for in the preview.
+      previewKey(code, mods) {
+        if (!waitingKey || run !== 'running' || code !== waitingKey.key) return;
+        if (!waitingKey.mods.every(m => mods.includes(m))) return;
+        waitingKey = null;
+        pending = null;
+        scriptStep();
+      },
       previewHotkey(slot, point) {
         if (slot === 'toggle') return run === 'stopped' ? start() : stop(T('stopped'));
         if (slot === 'pause') return run === 'running' ? pause() : resume();

@@ -701,7 +701,7 @@ public class UiBridgeTests
     /// <summary>A host wired to recorders, an in-memory store and a hand-driven hotkey service.</summary>
     internal sealed class Fixture : IDisposable
     {
-        public Fixture(InMemoryProfileStore? store = null, IUiSettingsStore? settings = null)
+        public Fixture(InMemoryProfileStore? store = null, IUiSettingsStore? settings = null, Updates.Updater? updater = null, Updates.IUpdateHost? updateHost = null)
         {
             Settings = settings ?? new InMemoryUiSettingsStore();
             Live = new RecordingInputInjector(new ScreenPoint(300, 200));
@@ -716,7 +716,7 @@ public class UiBridgeTests
                 new FixedScreenGeometry(1920, 1080),
                 NeutralRandomSource.Instance);
             Channel = new FakeChannel();
-            Bridge = new UiBridge(Host, Injector, Channel, () => new DateTime(2026, 10, 16, 12, 34, 56), Settings);
+            Bridge = new UiBridge(Host, Injector, Channel, () => new DateTime(2026, 10, 16, 12, 34, 56), Settings, updater, updateHost);
             Bridge.Start();
         }
 

@@ -12,6 +12,9 @@ public sealed class UiSettings
     /// <summary>The interface language, <c>ru</c> or <c>en</c>.</summary>
     public string Language { get; set; } = UiText.Russian.Language;
 
+    /// <summary>The version the user chose «Пропустить эту версию» for; it is not offered again.</summary>
+    public string? SkippedVersion { get; set; }
+
     public UiSettings Clone() => (UiSettings)MemberwiseClone();
 }
 

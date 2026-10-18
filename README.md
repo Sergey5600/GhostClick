@@ -34,6 +34,9 @@
 You don't need administrator rights. If your PC is missing the Microsoft Edge WebView2 component,
 the installer adds it for you.
 
+GhostClick finds new versions by itself: when it starts it checks the releases page and, if
+there is an update, offers to install it. Profiles and scenarios are kept.
+
 ## How to use
 
 GhostClick opens in Russian the first time: click **EN** at the top right to switch it to English.

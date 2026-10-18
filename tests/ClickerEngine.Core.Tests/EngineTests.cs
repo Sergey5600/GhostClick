@@ -489,5 +489,9 @@ public class EngineTests
         public void KeyDown(VirtualKey key) => throw new InputInjectionException("blocked");
 
         public void KeyUp(VirtualKey key) => throw new InputInjectionException("blocked");
+
+        public void Scroll(int notches) => throw new InputInjectionException("blocked");
+
+        public void TypeCharacter(char character) => throw new InputInjectionException("blocked");
     }
 }

@@ -1,4 +1,4 @@
-// GhostClick v3 interface.
+// GhostClick v4 interface: v3 plus the scenario editor (scenario.js) and the update dialog.
 //
 // The page owns the editing of the visible profile slice (`p`): assignment rules, conflicts
 // and settings live here and every change is sent to the host whole. The host owns the
@@ -71,7 +71,14 @@
     timer: html`<svg width="16" height="16" viewBox="0 0 24 24"><path d="M10 2h4"></path><path d="M12 14l3-3"></path><circle cx="12" cy="14" r="8"></circle></svg>`,
     shield: html`<svg width="16" height="16" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path></svg>`,
     list: html`<svg width="16" height="16" viewBox="0 0 24 24"><path d="M8 6h13"></path><path d="M8 12h13"></path><path d="M8 18h13"></path><path d="M3 6h.01"></path><path d="M3 12h.01"></path><path d="M3 18h.01"></path></svg>`,
+    layers: html`<svg width="16" height="16" viewBox="0 0 24 24"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"></path><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"></path><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"></path></svg>`,
+    next: html`<svg width="9" height="15" viewBox="0 0 9 15" class="nav-chevron"><path d="m1.5 1.5 6 6-6 6"></path></svg>`,
+    back: html`<svg width="9" height="15" viewBox="0 0 9 15" class="back-chevron"><path d="m7.5 1.5-6 6 6 6"></path></svg>`,
+    download: html`<svg width="28" height="28" viewBox="0 0 24 24" class="update-icon"><path d="M12 15V3"></path><path d="m7 10 5 5 5-5"></path><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path></svg>`,
   };
+
+  // Settings pages: the root list leads to each.
+  const PAGES = { scenario: 'scenario', click: 'click', route: 'route', timing: 'timing', safety: 'safety', log: 'log' };
 
   // ---------------------------------------------------------------- the app
 
@@ -100,7 +107,34 @@
         toast: '',
         toastErr: false,
         settings: false,
+        // The settings page shown: null for the root list, or a key of PAGES.
+        page: null,
         menu: false,
+        // Scenario editor: undo history of the blocks, open blocks, hover, drag and drop, the
+        // «Добавить блок» search, a key being captured, a point being picked.
+        hist: [],
+        fut: [],
+        exp: {},
+        hov: null,
+        drag: null,
+        drop: null,
+        adding: false,
+        q: '',
+        cap: null,
+        picking: null,
+        pickPos: null,
+        // From the host: the profile's problems and the script block running.
+        issues: [],
+        block: null,
+        testing: false,
+        testStep: 0,
+        testTotal: null,
+        // Update dialog: null, 'ask', 'dl' or 'ready'.
+        upd: null,
+        updVer: '',
+        updPct: 0,
+        updMb: 0,
+        updTotal: 0,
         // The action whose «Как нажимать» popover is open (its key code), or null.
         pop: null,
         // Runtime, from the host.
@@ -123,7 +157,7 @@
       this.onMouseMove = e => { this.mouse = { x: e.screenX, y: e.screenY }; };
       this.onMouseDown = e => this.mouseDown(e);
       this.onMouseUp = e => { if (e.button === 3 || e.button === 4) e.preventDefault(); };
-      this.onBlur = () => this.setState({ pressed: {}, sel: null, pending: [], pop: null });
+      this.onBlur = () => this.setState({ pressed: {}, sel: null, pending: [], pop: null, cap: null });
 
       window.addEventListener('resize', this.onResize);
       window.addEventListener('keydown', this.onKeyDown);
@@ -152,8 +186,9 @@
     componentDidUpdate(_, previous) {
       // The host silences its hotkeys while we wait for a key, so pressing F6 to assign it
       // does not also start a run.
-      if (!!previous.sel !== !!this.state.sel) {
-        this.host.send({ type: 'listen', value: !!this.state.sel });
+      const listening = st => !!st.sel || !!st.cap;
+      if (listening(previous) !== listening(this.state)) {
+        this.host.send({ type: 'listen', value: listening(this.state) });
       }
     }
 
@@ -174,13 +209,48 @@
             p: m.profile.data,
             dirty: m.profile.dirty,
             dry: !!m.dryRun,
+            issues: m.profile.issues || [],
           });
           this.applyState(m.runtime);
           if (m.backend) this.log(`Backend: ${m.backend}`);
           break;
-        case 'profile':
+        case 'profile': {
+          // Another profile, or this one reverted: the undo history belongs to what was edited.
+          const fresh = m.profile.name !== this.state.profile ||
+            JSON.stringify(m.profile.data.script) !== JSON.stringify(this.p && this.p.script);
           this.p = m.profile.data;
-          this.setState({ profiles: m.profiles, profile: m.profile.name, p: m.profile.data, dirty: m.profile.dirty, menu: false });
+          this.setState({
+            profiles: m.profiles, profile: m.profile.name, p: m.profile.data, dirty: m.profile.dirty, menu: false,
+            issues: m.profile.issues || [],
+            ...(fresh ? { hist: [], fut: [], exp: {}, cap: null } : {}),
+          });
+          break;
+        }
+        case 'issues':
+          this.setState({ issues: m.issues || [] });
+          break;
+        case 'block':
+          this.setState(s => ({ block: m.block, testStep: s.testing && m.block ? s.testStep + 1 : s.testStep }));
+          break;
+        case 'test':
+          this.setState({ testing: !!m.active });
+          if (!m.active && m.completed) this.toast(T('sc_testDone'));
+          break;
+        case 'testError':
+          this.testError(m);
+          break;
+        case 'updateAvailable':
+          if (!this.state.upd) this.setState({ upd: 'ask', updVer: m.version, updPct: 0, updMb: 0, updTotal: m.sizeMb || 0 });
+          break;
+        case 'updateProgress':
+          if (this.state.upd === 'dl') this.setState({ updPct: m.pct, updMb: m.mb, updTotal: m.totalMb });
+          break;
+        case 'updateReady':
+          this.setState({ upd: 'ready', updVer: m.version, updPct: 100 });
+          break;
+        case 'updateFailed':
+          this.setState({ upd: null });
+          this.toast(m.message, true);
           break;
         case 'dirty':
           this.setState({ dirty: !!m.value });
@@ -195,7 +265,7 @@
           this.toast(m.message, m.error);
           break;
         case 'pointAdded':
-          this.addPoint(m.x, m.y);
+          if (!this.scnPointHotkey(m.x, m.y)) this.addPoint(m.x, m.y);
           break;
         case 'hotkey': {
           const b = this.p && this.p.bind[m.slot];
@@ -215,7 +285,7 @@
       const span = m.elapsedMs - first.t;
       const rate = m.state === 'running' && span >= 400 ? ((m.clicks - first.c) * 1000) / span : 0;
 
-      this.setState({ run: m.state, clicks: m.clicks, elapsedMs: m.elapsedMs, pointIndex: m.pointIndex, rate });
+      this.setState({ run: m.state, clicks: m.clicks, elapsedMs: m.elapsedMs, pointIndex: m.pointIndex, rate, block: m.block || null });
     }
 
     // -------------------------------------------------------------- helpers
@@ -243,8 +313,19 @@
     keyDown(e) {
       if (!this.p) return;
       if (e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+      if (this.scnKeyDown(e)) return;
+      if (!this.host.native && this.host.previewKey) this.host.previewKey(e.code, evMods(e));
+      if (e.code === 'Escape' && this.state.upd === 'ask') {
+        this.setState({ upd: null });
+        return;
+      }
+      if (e.code === 'Escape' && this.state.settings && this.state.page) {
+        this.setState({ page: null });
+        return;
+      }
       if (e.code === 'Escape' && (this.state.settings || this.state.menu || this.state.pop)) {
-        this.setState({ settings: false, menu: false, pop: null });
+        this.closeSettings();
+        this.setState({ menu: false, pop: null });
         return;
       }
 
@@ -429,6 +510,10 @@
     }
 
     // -------------------------------------------------------------- commands
+
+    closeSettings() {
+      this.setState({ settings: false, adding: false, cap: null });
+    }
 
     startStop() {
       this.host.send({ type: this.state.run === 'stopped' ? 'start' : 'stop' });
@@ -753,7 +838,7 @@
             ${LANGS.map(code => html`
               <button key=${code} class=${code === st.lang ? 'on' : ''} onClick=${() => this.setLang(code)}>${code.toUpperCase()}</button>`)}
           </div>
-          <button class="pill-button" onClick=${() => this.setState({ settings: true, sel: null, pending: [], menu: false, pop: null })}>${T('settings')}</button>
+          <button class="pill-button" onClick=${() => this.setState({ settings: true, page: null, sel: null, pending: [], menu: false, pop: null })}>${T('settings')}</button>
         </div>`;
     }
 
@@ -766,7 +851,7 @@
         { v: `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`, l: T('cTime') },
         { v: String(st.clicks), l: T('cClicks') },
         { v: st.run === 'running' ? st.rate.toFixed(1) : '0', l: T('cCps') },
-        { v: p.repeat === 'fixed' ? String(Math.max(0, p.count - st.clicks)) : '∞', l: T('cLeft') },
+        { v: p.kind !== 'script' && p.repeat === 'fixed' ? String(Math.max(0, p.count - st.clicks)) : '∞', l: T('cLeft') },
       ];
       const stopped = st.run === 'stopped';
       const dry = toggleLook(st.dry);
@@ -785,7 +870,7 @@
           <div class="status">
             <div class="state">
               <span class="dot" style=${`background:${RUN[1]};`}></span>
-              <span class="label">${st.dry && st.run === 'running' ? 'Dry run' : RUN[0]}</span>
+              <span class="label">${(st.dry || st.testing) && st.run === 'running' ? 'Dry run' : RUN[0]}</span>
             </div>
             ${counters.map((c, i) => html`
               <div key=${i} class="counter">
@@ -806,6 +891,7 @@
     renderSettings() {
       const st = this.state;
       const p = st.p;
+      const page = st.page && PAGES[st.page] ? st.page : null;
       const isPoint = p.target === 'points';
       const n = p.points.length;
       const pointLabel = T('nPoints', n);
@@ -814,139 +900,216 @@
         T('every', p.rand ? `${p.minDelay}–${p.maxDelay}` : p.delay),
         p.repeat === 'fixed' ? T('times', p.count) : T('unlimited'),
       ].join(' · ');
-      const rand = toggleLook(p.rand);
-      const flagDefs = ['jitter', 'holdRandom', 'stopOnMouseMove', 'activeWindowOnly'].map((key, i) => {
-        const [text, explain] = T('flags')[i];
-        return [key, typeof text === 'function' ? text(p.jitterPx) : text, explain];
-      });
+      const flagKeys = ['jitter', 'holdRandom', 'stopOnMouseMove', 'activeWindowOnly'];
       const separator = html`<div class="row-separator"></div>`;
-      const header = (color, icon, title, extra) => html`
-        <div class="section-header">
+      const title = page ? T(page === 'scenario' ? 'scenario' : page) : T('settings');
+
+      const navRow = (key, color, icon, text, value) => html`
+        <div key=${key} class="nav-row" onClick=${() => this.setState({ page: key, adding: false })}>
           <div class="section-icon" style=${`background:${color};`}>${icon}</div>
-          <span class="title">${title}</span>
-          ${extra}
+          <span class="nav-label">${text}</span>
+          <div class="spacer"></div>
+          <span class="nav-value">${value}</span>
+          ${ICON.next}
         </div>`;
 
-      return html`
-        <div class="backdrop" onClick=${() => this.setState({ settings: false })}
-          style=${`opacity:${st.settings ? 1 : 0}; pointer-events:${st.settings ? 'auto' : 'none'};`}></div>
-        <div class=${st.settings ? 'sheet' : 'sheet closed'}>
-          <div class="sheet-header">
-            <div class="sheet-title">
-              <span class="heading">${T('settings')}</span>
-              <span class="subheading">${T('profile')} ${st.profile}</span>
-            </div>
-            <button class="round-button" title=${T('close')} onClick=${() => this.setState({ settings: false })}>${ICON.close}</button>
+      const root = () => html`
+        <div class="summary">
+          <div class="tile">${p.actions.map(fmt).join(' + ') || '—'}</div>
+          <div class="text">
+            <span class="caption">${T('pressedTogether')}</span>
+            <span class="line">${summary}</span>
           </div>
-          <div class="sheet-body">
-            <div class="summary">
-              <div class="tile">${p.actions.map(fmt).join(' + ') || '—'}</div>
-              <div class="text">
-                <span class="caption">${T('pressedTogether')}</span>
-                <span class="line">${summary}</span>
-              </div>
-              <button class="edit-button" onClick=${() => { this.setState({ settings: false }); this.select('action'); }}>${T('edit')}</button>
+          <button class="edit-button" onClick=${() => { this.closeSettings(); this.select('action'); }}>${T('edit')}</button>
+        </div>
+        <div class="group">
+          ${navRow('scenario', '#5e5ce6', ICON.layers, T('scenario'),
+            p.kind === 'script' ? T('nBlocks', window.GC_SCENARIO.countAll((p.script && p.script.blocks) || [])) : T('sc_off'))}
+        </div>
+        <div class="group">
+          ${navRow('click', '#0a84ff', ICON.click, T('click'), `${T(p.click === 'double' ? 'o_double' : 'o_single')} · ${T(isPoint ? 'o_point' : 'o_cursor')}`)}
+          ${isPoint && html`<div class="nav-separator"></div>${navRow('route', '#bf5af2', ICON.pin, T('route'), pointLabel)}`}
+          <div class="nav-separator"></div>
+          ${navRow('timing', '#ff9f0a', ICON.timer, T('timing'),
+            [T('every', p.rand ? `${p.minDelay}–${p.maxDelay}` : p.delay), p.repeat === 'fixed' ? T('times', p.count) : T('unlimited')].join(' · '))}
+          <div class="nav-separator"></div>
+          ${navRow('safety', '#30d158', ICON.shield, T('safety'), T('ofN', flagKeys.filter(k => p.flags[k]).length, flagKeys.length))}
+          <div class="nav-separator"></div>
+          ${navRow('log', '#636366', ICON.list, T('log'), String(st.log.length))}
+        </div>`;
+
+      const click = () => html`
+        <div class="group">
+          <div class="row"><span class="label">${T('type')}</span>
+            <div class="segments">${this.segment('click', [['single', T('o_single')], ['double', T('o_double')]])}</div></div>
+          ${separator}
+          <div class="row"><span class="label">${T('keyMode')}</span>
+            <div class="segments">${this.segment('mode', [['toggle', T('o_toggle')], ['hold', T('o_hold')]])}</div></div>
+          ${separator}
+          <div class="row"><span class="label">${T('target')}</span>
+            <div class="controls">
+              ${isPoint && html`<span class="points-label">${pointLabel}</span>`}
+              <div class="segments">${this.segment('target', [['cursor', T('o_cursor')], ['points', T('o_point')]])}</div>
+            </div></div>
+          ${separator}
+          <div class="row"><span class="label">${T('cursorMove')}</span>
+            <div class="segments">${this.segment('move', [['instant', T('o_instant')], ['smooth', T('o_smooth')]])}</div></div>
+        </div>`;
+
+      const route = () => html`
+        <div class="section">
+          <div class="section-header">
+            <span class="count">${pointLabel}</span>
+            <div class="spacer"></div>
+            ${n > 0 && html`<button class="link-button" onClick=${() => this.setP({ points: [] })}>${T('clear')}</button>`}
+          </div>
+          <div class="group">
+            ${n === 0 && html`<div class="empty">${T('ptHint', p.bind.point ? fmt(p.bind.point) : T('ptKeyFb'))}</div>`}
+            ${p.points.map((pt, i) => html`
+              <div key=${i} class="point-row" style=${`border-top:${i ? '0.5px solid rgba(84,84,88,0.55)' : 'none'};`}>
+                <span class="dot" style=${`background:${st.run !== 'stopped' && st.pointIndex === i ? '#bf5af2' : '#3a3a3c'};`}></span>
+                <span class="name">${T('ptN', i + 1)}</span>
+                <div class="spacer"></div>
+                <span class="xy">${pt.x}, ${pt.y}</span>
+                <button class="remove-button" title=${T('del')} onClick=${() => this.setP({ points: this.p.points.filter((_, j) => j !== i) })}>${ICON.remove}</button>
+              </div>`)}
+          </div>
+        </div>`;
+
+      const timing = () => {
+        const rand = toggleLook(p.rand);
+        return html`
+          <div class="group">
+            <div class="row"><span class="label">${T('interval')}</span>
+              <div class="controls tight">
+                ${!p.rand && html`
+                  <button class="step-button" onClick=${() => this.setP({ delay: Math.max(1, this.p.delay - 10) })}>${ICON.minus}</button>
+                  <input class="number" style="width:76px;" type="number" min="1" value=${p.delay} onChange=${this.number('delay', 1)} />
+                  <button class="step-button" onClick=${() => this.setP({ delay: this.p.delay + 10 })}>${ICON.plus}</button>`}
+                ${p.rand && html`
+                  <input class="number" style="width:70px;" type="number" min="0" value=${p.minDelay} onChange=${this.number('minDelay', 0)} />
+                  <span class="dash">–</span>
+                  <input class="number" style="width:70px;" type="number" min="0" value=${p.maxDelay} onChange=${this.number('maxDelay', 0)} />`}
+                <span class="unit">${T('ms')}</span>
+              </div></div>
+            ${separator}
+            <div class="row">
+              <div class="stack"><span class="label">${T('randInterval')}</span><span class="explain">${T('randSub')}</span></div>
+              <button class="switch" style=${`background:${rand.track};`} onClick=${() => this.setP({ rand: !this.p.rand })}>
+                <span class="knob" style=${`left:${rand.knob}px;`}></span>
+              </button>
             </div>
+            ${separator}
+            <div class="row"><span class="label">${T('repeat')}</span>
+              <div class="controls medium">
+                ${p.repeat === 'fixed' && html`<input class="number" style="width:80px;" type="number" min="1" value=${p.count} onChange=${this.number('count', 1)} />`}
+                <div class="segments">${this.segment('repeat', [['inf', T('o_inf')], ['fixed', T('o_fixed')]])}</div>
+              </div></div>
+          </div>`;
+      };
 
-            <div class="section">
-              ${header('#0a84ff', ICON.click, T('click'), html`<div class="spacer"></div>`)}
-              <div class="group">
-                <div class="row"><span class="label">${T('type')}</span>
-                  <div class="segments">${this.segment('click', [['single', T('o_single')], ['double', T('o_double')]])}</div></div>
-                ${separator}
-                <div class="row"><span class="label">${T('keyMode')}</span>
-                  <div class="segments">${this.segment('mode', [['toggle', T('o_toggle')], ['hold', T('o_hold')]])}</div></div>
-                ${separator}
-                <div class="row"><span class="label">${T('target')}</span>
-                  <div class="controls">
-                    ${isPoint && html`<span class="points-label">${pointLabel}</span>`}
-                    <div class="segments">${this.segment('target', [['cursor', T('o_cursor')], ['points', T('o_point')]])}</div>
-                  </div></div>
-                ${separator}
-                <div class="row"><span class="label">${T('cursorMove')}</span>
-                  <div class="segments">${this.segment('move', [['instant', T('o_instant')], ['smooth', T('o_smooth')]])}</div></div>
-              </div>
-            </div>
-
-            ${isPoint && html`
-              <div class="section">
-                ${header('#bf5af2', ICON.pin, T('route'), html`
-                  <span class="count">${pointLabel}</span>
-                  <div class="spacer"></div>
-                  ${n > 0 && html`<button class="link-button" onClick=${() => this.setP({ points: [] })}>${T('clear')}</button>`}`)}
-                <div class="group">
-                  ${n === 0 && html`<div class="empty">${T('ptHint', p.bind.point ? fmt(p.bind.point) : T('ptKeyFb'))}</div>`}
-                  ${p.points.map((pt, i) => html`
-                    <div key=${i} class="point-row" style=${`border-top:${i ? '0.5px solid rgba(84,84,88,0.55)' : 'none'};`}>
-                      <span class="dot" style=${`background:${st.run !== 'stopped' && st.pointIndex === i ? '#bf5af2' : '#3a3a3c'};`}></span>
-                      <span class="name">${T('ptN', i + 1)}</span>
-                      <div class="spacer"></div>
-                      <span class="xy">${pt.x}, ${pt.y}</span>
-                      <button class="remove-button" title=${T('del')} onClick=${() => this.setP({ points: this.p.points.filter((_, j) => j !== i) })}>${ICON.remove}</button>
-                    </div>`)}
-                </div>
-              </div>`}
-
-            <div class="section">
-              ${header('#ff9f0a', ICON.timer, T('timing'), html`<div class="spacer"></div>`)}
-              <div class="group">
-                <div class="row"><span class="label">${T('interval')}</span>
-                  <div class="controls tight">
-                    ${!p.rand && html`
-                      <button class="step-button" onClick=${() => this.setP({ delay: Math.max(1, this.p.delay - 10) })}>${ICON.minus}</button>
-                      <input class="number" style="width:76px;" type="number" min="1" value=${p.delay} onChange=${this.number('delay', 1)} />
-                      <button class="step-button" onClick=${() => this.setP({ delay: this.p.delay + 10 })}>${ICON.plus}</button>`}
-                    ${p.rand && html`
-                      <input class="number" style="width:70px;" type="number" min="0" value=${p.minDelay} onChange=${this.number('minDelay', 0)} />
-                      <span class="dash">–</span>
-                      <input class="number" style="width:70px;" type="number" min="0" value=${p.maxDelay} onChange=${this.number('maxDelay', 0)} />`}
-                    <span class="unit">${T('ms')}</span>
-                  </div></div>
-                ${separator}
-                <div class="row">
-                  <div class="stack"><span class="label">${T('randInterval')}</span><span class="explain">${T('randSub')}</span></div>
-                  <button class="switch" style=${`background:${rand.track};`} onClick=${() => this.setP({ rand: !this.p.rand })}>
-                    <span class="knob" style=${`left:${rand.knob}px;`}></span>
+      const safety = () => html`
+        <div class="group">
+          ${flagKeys.map((key, i) => {
+            const [text, explain] = T('flags')[i];
+            const look = toggleLook(p.flags[key]);
+            return html`
+              <div key=${key}>
+                ${i > 0 && separator}
+                <div class="row tall">
+                  <div class="stack"><span class="label">${typeof text === 'function' ? text(p.jitterPx) : text}</span><span class="explain">${explain}</span></div>
+                  <button class="switch" style=${`background:${look.track};`}
+                    onClick=${() => this.setP({ flags: { ...this.p.flags, [key]: !this.p.flags[key] } })}>
+                    <span class="knob" style=${`left:${look.knob}px;`}></span>
                   </button>
                 </div>
-                ${separator}
-                <div class="row"><span class="label">${T('repeat')}</span>
-                  <div class="controls medium">
-                    ${p.repeat === 'fixed' && html`<input class="number" style="width:80px;" type="number" min="1" value=${p.count} onChange=${this.number('count', 1)} />`}
-                    <div class="segments">${this.segment('repeat', [['inf', T('o_inf')], ['fixed', T('o_fixed')]])}</div>
-                  </div></div>
-              </div>
-            </div>
+              </div>`;
+          })}
+        </div>`;
 
-            <div class="section">
-              ${header('#30d158', ICON.shield, T('safety'), html`<div class="spacer"></div>`)}
-              <div class="group">
-                ${flagDefs.map(([key, text, explain], i) => {
-                  const look = toggleLook(p.flags[key]);
-                  return html`
-                    <div key=${key}>
-                      ${i > 0 && separator}
-                      <div class="row tall">
-                        <div class="stack"><span class="label">${text}</span><span class="explain">${explain}</span></div>
-                        <button class="switch" style=${`background:${look.track};`}
-                          onClick=${() => this.setP({ flags: { ...this.p.flags, [key]: !this.p.flags[key] } })}>
-                          <span class="knob" style=${`left:${look.knob}px;`}></span>
-                        </button>
-                      </div>
-                    </div>`;
-                })}
-              </div>
-            </div>
+      const log = () => html`
+        <div class="section">
+          <div class="section-header"><div class="spacer"></div>
+            <button class="link-button" onClick=${() => this.setState({ log: [] })}>${T('clear')}</button></div>
+          <div class="log">
+            ${st.log.map((l, i) => html`
+              <div key=${i} class="log-line"><span class="time">${l.t}</span><span class="message">${l.m}</span></div>`)}
+          </div>
+        </div>`;
 
-            <div class="section">
-              ${header('#636366', ICON.list, T('log'), html`
-                <div class="spacer"></div>
-                <button class="link-button" onClick=${() => this.setState({ log: [] })}>${T('clear')}</button>`)}
-              <div class="log">
-                ${st.log.map((l, i) => html`
-                  <div key=${i} class="log-line"><span class="time">${l.t}</span><span class="message">${l.m}</span></div>`)}
+      const body = {
+        scenario: () => this.renderScenarioPage(),
+        click,
+        route: () => (isPoint ? route() : null),
+        timing,
+        safety,
+        log,
+      };
+
+      return html`
+        <div class="backdrop" onClick=${() => this.closeSettings()}
+          style=${`opacity:${st.settings ? 1 : 0}; pointer-events:${st.settings ? 'auto' : 'none'};`}></div>
+        <div class=${['sheet', page === 'scenario' ? 'wide' : '', st.settings ? '' : 'closed'].join(' ').trim()}>
+          <div class="sheet-header">
+            <div class="sheet-title">
+              ${page && html`<button class="back-button" onClick=${() => this.setState({ page: null, adding: false, cap: null })}>${ICON.back}${T('settings')}</button>`}
+              <span class="heading">${title}</span>
+              ${!page && html`<span class="subheading">${T('profile')} ${st.profile}</span>`}
+            </div>
+            <button class="round-button" title=${T('close')} onClick=${() => this.closeSettings()}>${ICON.close}</button>
+          </div>
+          <div class="sheet-body">
+            ${page ? body[page]() : root()}
+          </div>
+        </div>`;
+    }
+
+    renderUpdate() {
+      const st = this.state;
+      if (!st.upd) return null;
+      const close = () => this.setState({ upd: null });
+      const titleKey = { ask: 'up_title', dl: 'up_dlTitle', ready: 'up_readyTitle' }[st.upd];
+
+      return html`
+        <div class="update-scrim">
+          <div class="update-card">
+            <div class="update-head">
+              <div class="update-tile">${ICON.download}</div>
+              <div class="update-titles">
+                <span class="title">${T(titleKey)}</span>
+                <span class="version">GhostClick ${st.updVer}</span>
               </div>
             </div>
+            ${st.upd === 'dl' && html`
+              <div class="update-progress">
+                <div class="bar"><div class="fill" style=${`width:${st.updPct}%;`}></div></div>
+                <span class="text">${T('up_pct', Math.round(st.updPct), Number(st.updMb).toFixed(1), Number(st.updTotal).toFixed(1))}</span>
+              </div>`}
+            ${st.upd === 'ready' && html`<span class="update-ready">${T('up_readyS')}</span>`}
+            <div class="update-buttons">
+              ${st.upd === 'ask' && html`
+                <button class="update-button" onClick=${close}>${T('up_later')}</button>
+                <button class="update-button primary" onClick=${() => {
+                  this.setState({ upd: 'dl', updPct: 0, updMb: 0 });
+                  this.host.send({ type: 'updateStart' });
+                }}>${T('up_go')}</button>`}
+              ${st.upd === 'dl' && html`
+                <button class="update-button" onClick=${() => { close(); this.host.send({ type: 'updateCancel' }); }}>${T('up_cancel')}</button>`}
+              ${st.upd === 'ready' && html`
+                <button class="update-button" onClick=${() => {
+                  close();
+                  this.host.send({ type: 'updateOnExit' });
+                  this.toast(T('up_exitNote'));
+                }}>${T('up_onExit')}</button>
+                <button class="update-button primary" onClick=${() => this.host.send({ type: 'updateRestart' })}>${T('up_restart')}</button>`}
+            </div>
+            ${st.upd === 'ask' && html`
+              <button class="update-skip" onClick=${() => {
+                const version = st.updVer;
+                close();
+                this.host.send({ type: 'updateSkip', version });
+                this.toast(T('up_skipped', version));
+              }}>${T('up_skip')}</button>`}
           </div>
         </div>`;
     }
@@ -989,11 +1152,15 @@
                 ${this.renderDock()}
               </div>
               ${this.renderSettings()}
+              ${this.renderPicker()}
+              ${this.renderUpdate()}
             </div>
           </div>
         </div>`;
     }
   }
+
+  Object.assign(App.prototype, window.GC_SCENARIO.methods);
 
   render(html`<${App} host=${window.GC_createHost()} />`, document.getElementById('root'));
 })();

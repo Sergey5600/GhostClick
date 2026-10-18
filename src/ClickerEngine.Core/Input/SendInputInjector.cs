@@ -98,6 +98,42 @@ public sealed class SendInputInjector : IInputInjector
 
     public void KeyUp(VirtualKey key) => SendKey(key, down: false);
 
+    /// <summary>One wheel event per notch, so applications that read single notches see each of them.</summary>
+    public void Scroll(int notches)
+    {
+        int step = notches > 0 ? WheelDelta : -WheelDelta;
+        for (int i = 0; i < Math.Abs(notches); i++)
+        {
+            Send(CreateMouseInput(NativeMethods.MOUSEEVENTF_WHEEL, unchecked((uint)step)));
+        }
+    }
+
+    /// <summary>A Unicode key down and up: the character arrives as text, whatever the layout.</summary>
+    public void TypeCharacter(char character)
+    {
+        Send(CreateUnicodeInput(character, NativeMethods.KEYEVENTF_UNICODE));
+        Send(CreateUnicodeInput(character, NativeMethods.KEYEVENTF_UNICODE | NativeMethods.KEYEVENTF_KEYUP));
+    }
+
+    /// <summary>One notch of the wheel, as Windows counts it.</summary>
+    private const int WheelDelta = 120;
+
+    private NativeMethods.INPUT CreateUnicodeInput(char character, uint flags) => new()
+    {
+        type = NativeMethods.INPUT_KEYBOARD,
+        u = new NativeMethods.InputUnion
+        {
+            ki = new NativeMethods.KEYBDINPUT
+            {
+                wVk = 0,
+                wScan = character,
+                dwFlags = flags,
+                time = 0,
+                dwExtraInfo = new IntPtr(ExtraInfoSignature),
+            },
+        },
+    };
+
     private static bool IsExtendedKey(VirtualKey key) => key switch
     {
         VirtualKey.Insert or VirtualKey.Delete or VirtualKey.Home or VirtualKey.End or

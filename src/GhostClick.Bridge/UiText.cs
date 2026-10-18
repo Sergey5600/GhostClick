@@ -55,6 +55,12 @@ public sealed class UiText
         HoldTooShort = "Время зажатия должно быть больше нуля",
         HoldNeedsStartKey = "В режиме удержания нужна клавиша «Старт / Стоп»",
         NeedsName = "У профиля должно быть имя",
+        UpdateFound = v => $"Доступна версия {v}",
+        UpdateCheckFailed = "Не удалось проверить обновления: ",
+        UpdateFailed = "Не удалось загрузить обновление: ",
+        UpdateBadChecksum = "файл повреждён (контрольная сумма не совпала)",
+        UpdateScheduled = v => $"Версия {v} установится при выходе",
+        TestNeedsScript = "Добавьте в сценарий хотя бы один включённый блок",
     };
 
     public static readonly UiText English = new()
@@ -102,6 +108,12 @@ public sealed class UiText
         HoldTooShort = "The hold time must be more than zero",
         HoldNeedsStartKey = "Hold mode needs a “Start / Stop” key",
         NeedsName = "The profile needs a name",
+        UpdateFound = v => $"Version {v} is available",
+        UpdateCheckFailed = "Couldn’t check for updates: ",
+        UpdateFailed = "Couldn’t download the update: ",
+        UpdateBadChecksum = "the file is damaged (its checksum does not match)",
+        UpdateScheduled = v => $"Version {v} will install on exit",
+        TestNeedsScript = "Add at least one enabled block to the scenario",
     };
 
     private UiText()
@@ -205,6 +217,19 @@ public sealed class UiText
     public required string HoldNeedsStartKey { get; init; }
 
     public required string NeedsName { get; init; }
+
+    /// <summary>The log line when a newer version is found.</summary>
+    public required Func<string, string> UpdateFound { get; init; }
+
+    public required string UpdateCheckFailed { get; init; }
+
+    public required string UpdateFailed { get; init; }
+
+    public required string UpdateBadChecksum { get; init; }
+
+    public required Func<string, string> UpdateScheduled { get; init; }
+
+    public required string TestNeedsScript { get; init; }
 
     /// <summary>A run length the way the log writes it: whole minutes, otherwise seconds.</summary>
     public string Duration(int seconds) => seconds % 60 == 0 ? Minutes(seconds / 60) : Seconds(seconds);
