@@ -121,6 +121,7 @@
         adding: false,
         q: '',
         cap: null,
+        ptMenu: null,
         picking: null,
         pickPos: null,
         // From the host: the profile's problems and the script block running.
@@ -157,7 +158,7 @@
       this.onMouseMove = e => { this.mouse = { x: e.screenX, y: e.screenY }; };
       this.onMouseDown = e => this.mouseDown(e);
       this.onMouseUp = e => { if (e.button === 3 || e.button === 4) e.preventDefault(); };
-      this.onBlur = () => this.setState({ pressed: {}, sel: null, pending: [], pop: null, cap: null });
+      this.onBlur = () => this.setState({ pressed: {}, sel: null, pending: [], pop: null, cap: null, ptMenu: null });
 
       window.addEventListener('resize', this.onResize);
       window.addEventListener('keydown', this.onKeyDown);
@@ -222,7 +223,7 @@
           this.setState({
             profiles: m.profiles, profile: m.profile.name, p: m.profile.data, dirty: m.profile.dirty, menu: false,
             issues: m.profile.issues || [],
-            ...(fresh ? { hist: [], fut: [], exp: {}, cap: null } : {}),
+            ...(fresh ? { hist: [], fut: [], exp: {}, cap: null, ptMenu: null } : {}),
           });
           break;
         }
@@ -376,6 +377,9 @@
         e.preventDefault();
       }
 
+      // A saved-point menu closes on a click anywhere outside it.
+      if (this.state.ptMenu && !(e.target instanceof Element && e.target.closest('.scn-ptmenu'))) this.setState({ ptMenu: null });
+
       if (!this.state.sel) return;
       const id = { 1: 'Mouse3', 3: 'Mouse4', 4: 'Mouse5' }[e.button];
       if (!id) return;
@@ -512,7 +516,7 @@
     // -------------------------------------------------------------- commands
 
     closeSettings() {
-      this.setState({ settings: false, adding: false, cap: null });
+      this.setState({ settings: false, adding: false, cap: null, ptMenu: null });
     }
 
     startStop() {
@@ -1052,7 +1056,7 @@
         <div class=${['sheet', page === 'scenario' ? 'wide' : '', st.settings ? '' : 'closed'].join(' ').trim()}>
           <div class="sheet-header">
             <div class="sheet-title">
-              ${page && html`<button class="back-button" onClick=${() => this.setState({ page: null, adding: false, cap: null })}>${ICON.back}${T('settings')}</button>`}
+              ${page && html`<button class="back-button" onClick=${() => this.setState({ page: null, adding: false, cap: null, ptMenu: null })}>${ICON.back}${T('settings')}</button>`}
               <span class="heading">${title}</span>
               ${!page && html`<span class="subheading">${T('profile')} ${st.profile}</span>`}
             </div>

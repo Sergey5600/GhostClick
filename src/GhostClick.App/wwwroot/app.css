@@ -1166,6 +1166,68 @@ input:focus-visible {
 
 .scn-pick:hover { background: rgba(10, 132, 255, 0.26); }
 
+/* The saved-point menu in front of a point field's X and Y. */
+.scn-ptmenu { position: relative; margin-right: 4px; }
+
+.scn-ptmenu-button {
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(118, 118, 128, 0.22);
+  color: var(--text);
+  font: 500 13px var(--ui-control);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.scn-ptmenu-button:hover, .scn-ptmenu-button.open { background: rgba(118, 118, 128, 0.36); }
+.scn-ptmenu-dot { width: 8px; height: 8px; border-radius: 4px; flex: none; }
+
+.scn-ptmenu-pop {
+  position: absolute;
+  top: 36px;
+  right: 0;
+  z-index: 40;
+  width: 250px;
+  padding: 6px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: rgba(44, 44, 46, 0.96);
+  backdrop-filter: blur(30px);
+  box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.14), 0 16px 40px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+}
+
+.scn-ptmenu-title { padding: 6px 10px 4px; font-size: 12px; font-weight: 600; color: #8e8e93; }
+
+.scn-ptmenu-row {
+  height: 36px;
+  padding: 0 10px 0 6px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: 400 13px var(--ui-control);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+}
+
+.scn-ptmenu-row:hover { background: #0a84ff; }
+.scn-ptmenu-check { width: 16px; flex: none; display: flex; justify-content: center; }
+.scn-ptmenu-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scn-ptmenu-xy { font-variant-numeric: tabular-nums; color: #aeaeb2; }
+.scn-ptmenu-row:hover .scn-ptmenu-xy { color: #fff; }
+.scn-ptmenu-empty { padding: 8px 10px; font-size: 13px; color: #8e8e93; }
+.scn-ptmenu-sep { height: 0.5px; margin: 6px 4px; background: rgba(255, 255, 255, 0.12); }
+
 .scn-text {
   flex: 1 1 240px;
   min-width: 0;
